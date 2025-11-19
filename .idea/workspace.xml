@@ -5,13 +5,10 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="c90cc5bf-1bba-4cb4-bae9-716dc1cf4ede" name="更改" comment="V1.0.0 &#10;初始版本 上传 1">
-      <change afterPath="$PROJECT_DIR$/process_logout.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/automation_config.json" beforeDir="false" afterPath="$PROJECT_DIR$/automation_config.json" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/base_executor.py" beforeDir="false" afterPath="$PROJECT_DIR$/base_executor.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/config_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/config_manager.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main_app.py" beforeDir="false" afterPath="$PROJECT_DIR$/main_app.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui_main.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui_main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/process_login.py" beforeDir="false" afterPath="$PROJECT_DIR$/process_login.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -102,7 +99,15 @@
       <option name="project" value="LOCAL" />
       <updated>1763523240538</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="V1.0.0 &#10;初始版本 上传 1">
+      <option name="closed" value="true" />
+      <created>1763526425443</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1763526425443</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -120,16 +125,5 @@
     <MESSAGE value="V1.0.0 &#10;初始版本 上传" />
     <MESSAGE value="V1.0.0 &#10;初始版本 上传 1" />
     <option name="LAST_COMMIT_MESSAGE" value="V1.0.0 &#10;初始版本 上传 1" />
-  </component>
-  <component name="XDebuggerManager">
-    <breakpoint-manager>
-      <breakpoints>
-        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/base_executor.py</url>
-          <line>41</line>
-          <option name="timeStamp" value="1" />
-        </line-breakpoint>
-      </breakpoints>
-    </breakpoint-manager>
   </component>
 </project>
