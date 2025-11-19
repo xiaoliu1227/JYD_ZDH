@@ -1,0 +1,67 @@
+import os
+import json
+from PyQt5.QtWidgets import QMessageBox
+
+CONFIG_FILE = 'automation_config.json'
+
+# 默认配置增加了 "accounts" 字段
+DEFAULT_CONFIG = {
+  "accounts": {},
+  "elements": {
+    "login_page_username_input": { "description": "登录页-账号输入框", "value": "placeholder=\"请输入手机号或邮箱\"" },
+    "login_page_password_input": { "description": "登录页-密码输入框", "value": "placeholder=\"请输入登录密码\"" },
+    "login_page_login_button": { "description": "登录页-登录按钮", "value": "<span>登录" },
+    "org_popup_dialog": { "description": "组织选择弹窗-整个弹窗", "value": "class=\"el-dialog__body\"" },
+    "org_popup_input": { "description": "组织选择弹窗-输入框", "value": "placeholder=\"请选择\"" },
+    "org_popup_list_item": { "description": "组织选择弹窗-列表项", "value": "<span>156" },
+    "org_popup_confirm_button": { "description": "组织选择弹窗-确认按钮", "value": "<span>确认登录" },
+    "home_page_notification_popup": { "description": "首页-弹窗(可选)", "value": "" },
+    "home_page_notification_close_button": { "description": "首页-关闭按钮(可选)", "value": "" }
+  },
+  "workflows": {
+    "workflow_full_login": {
+      "description": "标准登录流程",
+      "steps": [
+        {"action": "ensure_on_page", "value": "https://saaserp-pos.yibainetwork.com/#/login_page"},
+        {"action": "type", "target": "login_page_username_input", "value": "{username}"},
+        {"action": "type", "target": "login_page_password_input", "value": "{password}"},
+        {"action": "click", "target": "login_page_login_button"},
+        {"action": "wait_visible", "target": "org_popup_dialog", "timeout": 5},
+        {"action": "type", "target": "org_popup_input", "value": "156"},
+        {"action": "wait_visible", "target": "org_popup_list_item", "timeout": 3},
+        {"action": "click", "target": "org_popup_list_item"},
+        {"action": "click", "target": "org_popup_confirm_button"},
+        {"action": "wait_url_contains", "value": "home_page", "timeout": 10},
+        {"action": "if_visible_click", "target": "home_page_notification_close_button", "check_target": "home_page_notification_popup"}
+      ]
+    }
+  }
+}
+
+def load_config():
+    if not os.path.exists(CONFIG_FILE):
+        try:
+            save_config(DEFAULT_CONFIG)
+            return DEFAULT_CONFIG
+        except Exception as e:
+            QMessageBox.critical(None, "错误", f"创建配置失败: {e}")
+            return None
+    try:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            # 兼容旧版本：如果旧配置没有 accounts 字段，自动补上
+            if "accounts" not in data:
+                data["accounts"] = {}
+            return data
+    except Exception as e:
+        QMessageBox.critical(None, "错误", f"加载配置失败: {e}")
+        return None
+
+def save_config(config_data):
+    try:
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(config_data, f, indent=4, ensure_ascii=False)
+        return True
+    except Exception as e:
+        QMessageBox.critical(None, "保存错误", f"无法保存: {e}")
+        return False
