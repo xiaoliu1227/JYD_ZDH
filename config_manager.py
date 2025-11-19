@@ -4,19 +4,19 @@ from PyQt5.QtWidgets import QMessageBox
 
 CONFIG_FILE = 'automation_config.json'
 
-# 默认配置增加了 "accounts" 字段
+# 默认配置结构
 DEFAULT_CONFIG = {
   "accounts": {},
   "elements": {
-    "login_page_username_input": { "description": "登录页-账号输入框", "value": "placeholder=\"请输入手机号或邮箱\"" },
-    "login_page_password_input": { "description": "登录页-密码输入框", "value": "placeholder=\"请输入登录密码\"" },
-    "login_page_login_button": { "description": "登录页-登录按钮", "value": "<span>登录" },
-    "org_popup_dialog": { "description": "组织选择弹窗-整个弹窗", "value": "class=\"el-dialog__body\"" },
-    "org_popup_input": { "description": "组织选择弹窗-输入框", "value": "placeholder=\"请选择\"" },
-    "org_popup_list_item": { "description": "组织选择弹窗-列表项", "value": "<span>156" },
-    "org_popup_confirm_button": { "description": "组织选择弹窗-确认按钮", "value": "<span>确认登录" },
-    "home_page_notification_popup": { "description": "首页-弹窗(可选)", "value": "" },
-    "home_page_notification_close_button": { "description": "首页-关闭按钮(可选)", "value": "" }
+    "login_page_username_input": { "description": "登录页-账号输入框", "by": "auto", "value": "placeholder=\"请输入手机号或邮箱\"" },
+    "login_page_password_input": { "description": "登录页-密码输入框", "by": "auto", "value": "placeholder=\"请输入登录密码\"" },
+    "login_page_login_button": { "description": "登录页-登录按钮", "by": "auto", "value": "<span>登录" },
+    "org_popup_dialog": { "description": "组织选择弹窗-整个弹窗", "by": "auto", "value": "class=\"el-dialog__body\"" },
+    "org_popup_input": { "description": "组织选择弹窗-输入框", "by": "auto", "value": "placeholder=\"请选择\"" },
+    "org_popup_list_item": { "description": "组织选择弹窗-列表项", "by": "auto", "value": "<span>156" },
+    "org_popup_confirm_button": { "description": "组织选择弹窗-确认按钮", "by": "auto", "value": "<span>确认登录" },
+    "home_page_notification_popup": { "description": "首页-弹窗(可选)", "by": "auto", "value": "" },
+    "home_page_notification_close_button": { "description": "首页-关闭按钮(可选)", "by": "auto", "value": "" }
   },
   "workflows": {
     "workflow_full_login": {
@@ -49,9 +49,10 @@ def load_config():
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
-            # 兼容旧版本：如果旧配置没有 accounts 字段，自动补上
-            if "accounts" not in data:
-                data["accounts"] = {}
+            if "accounts" not in data: data["accounts"] = {}
+            # 确保 elements 中有 by 字段，防止 worker 报错
+            for key, item in data.get("elements", {}).items():
+                if "by" not in item: item["by"] = "auto"
             return data
     except Exception as e:
         QMessageBox.critical(None, "错误", f"加载配置失败: {e}")

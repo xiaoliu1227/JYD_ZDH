@@ -88,7 +88,7 @@ class Ui_MainWindow(object):
         self.log_output.setReadOnly(True)
         self.run_layout.addWidget(self.log_output)
 
-        # --- Tab 2: 元素配置 (保持不变) ---
+        # --- Tab 2: 元素配置 ---
         self.config_tab = QWidget()
         self.tabs.addTab(self.config_tab, "元素定位配置")
         self.config_tab_layout = QVBoxLayout(self.config_tab)
