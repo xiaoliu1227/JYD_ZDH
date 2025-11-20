@@ -1,18 +1,25 @@
 import sys
 import os
+import time
+import re
 import openpyxl
+import requests
+import xlsxwriter
+from datetime import datetime
+from io import BytesIO
+from PIL import Image as PilImage
+
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QTabWidget, QFormLayout, QScrollArea, QComboBox,
                              QLineEdit, QPushButton, QLabel, QDialog, QGroupBox,
-                             QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QTextEdit, QFileDialog)
-from PyQt5.QtCore import Qt, QSettings
-from PyQt5.QtGui import QFont, QTextCharFormat, QTextCursor
+                             QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QTextEdit, QFileDialog,
+                             QCheckBox, QGridLayout)
+from PyQt5.QtCore import Qt, QSettings, QSize, QRect
+from PyQt5.QtGui import QFont, QTextCharFormat, QTextCursor, QPixmap, QIcon, QPainter, QPen, QBrush, QColor
 
-# 导入配置管理器和定位解析器
 from config_manager import config_manager
 from edge_automation_tool import LocatorParser
 
-# 假设的自动化核心函数 (需要在实际环境中运行)
 try:
     from selenium import webdriver
     from selenium.webdriver.edge.service import Service
@@ -21,50 +28,261 @@ try:
     from selenium.webdriver.common.action_chains import ActionChains
     from selenium.common.exceptions import TimeoutException, NoSuchElementException
     from selenium.webdriver.common.keys import Keys
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.edge.options import Options as EdgeOptions
 
     SELENIUM_AVAILABLE = True
 except ImportError:
     SELENIUM_AVAILABLE = False
 
 
-# 【ResultsTableDialog 类】 (与之前一致，用于结果展示)
-class ResultsTableDialog(QDialog):
-    def __init__(self, data, headers, parent=None):
+# --- 【模式二专用】图片筛选弹窗 ---
+class ImageSelectorDialog(QDialog):
+    def __init__(self, all_results, source_file_path, image_session, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("自动化抓取结果预览")
-        self.setGeometry(200, 200, 800, 600)
+        self.all_results = all_results
+        self.source_file_path = source_file_path
+        self.image_session = image_session
+        self.setWindowTitle("图片筛选与导出 (模式二)")
+        self.setGeometry(100, 100, 1200, 800)
+
         self.layout = QVBoxLayout(self)
+        self.layout.addWidget(QLabel("请点击图片进行选择 (红框数字代表导出顺序，再次点击取消，最多 9 张):"))
 
-        self.table = QTableWidget()
-        self.table.setColumnCount(len(headers))
-        self.table.setHorizontalHeaderLabels(headers)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        self.container_layout = QVBoxLayout(container)
 
-        self.table.setRowCount(len(data))
-        for row_idx, row_data in enumerate(data):
-            for col_idx, cell_data in enumerate(row_data):
-                self.table.setItem(row_idx, col_idx, QTableWidgetItem(str(cell_data)))
+        self.sku_widgets = []
+        for res in all_results:
+            sku_box = SKUResultWidget(res, self.image_session)
+            self.container_layout.addWidget(sku_box)
+            self.sku_widgets.append(sku_box)
 
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.layout.addWidget(self.table)
+        container.setLayout(self.container_layout)
+        scroll.setWidget(container)
+        self.layout.addWidget(scroll)
 
-        close_button = QPushButton("关闭")
-        close_button.clicked.connect(self.accept)
-        self.layout.addWidget(close_button)
+        btn_layout = QHBoxLayout()
+        export_btn = QPushButton("导出选中结果到 Excel (链接版)")
+        export_btn.clicked.connect(self.export_data)
+        export_btn.setMinimumHeight(40)
+        btn_layout.addWidget(export_btn)
+
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(close_btn)
+
+        self.layout.addLayout(btn_layout)
+
+    def export_data(self):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base_dir = os.path.dirname(self.source_file_path) if self.source_file_path else os.getcwd()
+        filename = f"筛选导出结果_{timestamp}.xlsx"
+        save_path = os.path.join(base_dir, filename)
+
+        workbook = xlsxwriter.Workbook(save_path)
+        worksheet = workbook.add_worksheet()
+
+        text_keys = []
+        for res in self.all_results:
+            for k in res.get('text_info', {}).keys():
+                if k not in text_keys:
+                    text_keys.append(k)
+
+        img_keys = [f"图片链接_{i + 1}" for i in range(9)]
+
+        headers = ["SKU"] + text_keys + img_keys + ["ERROR"]
+
+        header_format = workbook.add_format({'bold': True, 'bg_color': '#D7E4BC', 'border': 1})
+        center_format = workbook.add_format({'valign': 'vcenter', 'border': 1})
+        wrap_format = workbook.add_format({'valign': 'vcenter', 'border': 1, 'text_wrap': True})
+
+        for col_idx, header in enumerate(headers):
+            worksheet.write(0, col_idx, header, header_format)
+            if "图片" in header:
+                worksheet.set_column(col_idx, col_idx, 40)  # 链接列宽一点
+            elif "描述" in header:
+                worksheet.set_column(col_idx, col_idx, 40)
+            else:
+                worksheet.set_column(col_idx, col_idx, 20)
+
+        current_row = 1
+
+        for i, sku_widget in enumerate(self.sku_widgets):
+            original_data = self.all_results[i]
+            selected_images = sku_widget.get_selected_images()
+
+            worksheet.write(current_row, 0, original_data['SKU'], center_format)
+
+            col_offset = 1
+            for key in text_keys:
+                val = original_data.get('text_info', {}).get(key, "")
+                fmt = wrap_format if key == "描述" else center_format
+                worksheet.write(current_row, col_offset, val, fmt)
+                col_offset += 1
+
+            # 写入图片链接
+            img_start_col = col_offset
+            for j in range(9):
+                if j < len(selected_images):
+                    worksheet.write(current_row, img_start_col + j, selected_images[j], center_format)
+                else:
+                    worksheet.write(current_row, img_start_col + j, "", center_format)
+
+            error_col = img_start_col + 9
+            err_msg = f"{original_data['ERROR']} - {original_data.get('Details', '')}" if 'ERROR' in original_data else ""
+            worksheet.write(current_row, error_col, err_msg, center_format)
+
+            # 恢复普通行高
+            worksheet.set_row(current_row, 20)
+            current_row += 1
+
+        try:
+            workbook.close()
+            QMessageBox.information(self, "导出成功", f"文件已保存至:\n{save_path}")
+            self.accept()
+        except Exception as e:
+            QMessageBox.critical(self, "导出失败", f"保存文件时出错: {e}")
+
+
+# --- 【新增类】可点击的图片 Label ---
+class ClickableImageLabel(QLabel):
+    def __init__(self, img_url, parent_widget):
+        super().__init__()
+        self.img_url = img_url
+        self.parent_widget = parent_widget
+        self.selection_number = 0
+
+        self.setFixedSize(100, 100)
+        self.setScaledContents(True)
+        self.setCursor(Qt.PointingHandCursor)
+
+        self.default_style = "border: 1px solid #ccc; background-color: #f0f0f0;"
+        self.setStyleSheet(self.default_style)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.parent_widget.handle_image_click(self.img_url)
+
+    def set_selection_number(self, number):
+        self.selection_number = number
+        self.repaint()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.selection_number > 0:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing)
+            pen = QPen(Qt.red)
+            pen.setWidth(4)
+            painter.setPen(pen)
+            painter.drawRect(self.rect())
+            badge_size = 24
+            badge_rect = QRect(self.width() - badge_size, 0, badge_size, badge_size)
+            brush = QBrush(Qt.red)
+            painter.setBrush(brush)
+            painter.setPen(Qt.NoPen)
+            painter.drawRect(badge_rect)
+            painter.setPen(Qt.white)
+            font = QFont("Arial", 12, QFont.Bold)
+            painter.setFont(font)
+            painter.drawText(badge_rect, Qt.AlignCenter, str(self.selection_number))
+
+
+# --- 【模式二专用】单个 SKU 展示组件 ---
+class SKUResultWidget(QGroupBox):
+    def __init__(self, sku_data, image_session, parent=None):
+        super().__init__(parent)
+        self.sku_data = sku_data
+        self.image_session = image_session
+        self.setTitle(f"SKU: {sku_data['SKU']}")
+        self.selected_images_list = []
+        self.image_label_map = {}
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout()
+
+        if 'ERROR' in self.sku_data:
+            error_label = QLabel(f"❌ 错误: {self.sku_data['ERROR']}")
+            error_label.setStyleSheet("color: red;")
+            layout.addWidget(error_label)
+
+        # 【核心修改】移除了 info_text 显示区域，只保留图片选择
+
+        images = self.sku_data.get('all_images', [])
+        if images:
+            image_area = QWidget()
+            grid = QGridLayout(image_area)
+
+            for i, img_url in enumerate(images):
+                img_label = ClickableImageLabel(img_url, self)
+                img_label.setToolTip(f"{img_url}")
+                self.image_label_map[img_url] = img_label
+
+                # 尝试加载图片用于预览
+                if i < 20:
+                    try:
+                        req = self.image_session.get(img_url, timeout=2)
+                        if req.status_code == 200:
+                            pixmap = QPixmap()
+                            pixmap.loadFromData(req.content)
+                            img_label.setPixmap(pixmap)
+                        else:
+                            img_label.setText("加载失败")
+                    except:
+                        img_label.setText("Error")
+                else:
+                    img_label.setText(f"图 {i + 1}")
+
+                grid.addWidget(img_label, i // 8, i % 8)
+
+            layout.addWidget(image_area)
+        else:
+            layout.addWidget(QLabel("未找到图片"))
+
+        self.setLayout(layout)
+
+    def handle_image_click(self, img_url):
+        if img_url in self.selected_images_list:
+            self.selected_images_list.remove(img_url)
+        else:
+            if len(self.selected_images_list) < 9:
+                self.selected_images_list.append(img_url)
+            else:
+                print("最多只能选择 9 张图片")
+        self.refresh_labels_state()
+
+    def refresh_labels_state(self):
+        for index, url in enumerate(self.selected_images_list):
+            label = self.image_label_map.get(url)
+            if label:
+                label.set_selection_number(index + 1)
+        for url, label in self.image_label_map.items():
+            if url not in self.selected_images_list:
+                label.set_selection_number(0)
+
+    def get_selected_images(self):
+        return self.selected_images_list
 
 
 class AutomationToolUI(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Edge 自动化配置工具")
-        self.setGeometry(100, 100, 850, 750)
+        self.setGeometry(100, 100, 950, 800)
 
         self.config_settings = QSettings('MyCompany', 'EdgeAutoTool')
 
         self.all_accounts = []
-        self.element_config = []  # 存储模块化结构
-        self.element_fields = {}  # 存储 QLineEdit 控件引用 (用于 get/set 数据)
+        self.element_config = []
+        self.element_widgets = {}
         self.runtime_selected_account_name = ''
         self.sku_file_path = ''
+        self.runtime_headless = False
+        self.image_session = requests.Session()
 
         self.load_config()
 
@@ -78,60 +296,45 @@ class AutomationToolUI(QMainWindow):
         self.create_operation_page()
         self.create_config_page()
 
-    # 【新增方法：数据结构统一（代码结构优先）】
     def _unify_element_config(self, code_structure, json_data):
-        """
-        将 JSON 文件中的定位值合并到 Python 代码定义的模块化结构中 (Python 结构优先)。
-        """
-
-        # 1. 扁平化 JSON 数据，方便查找 {"name": "locator"}
-        json_locators = {}
+        json_map = {}
         if json_data:
             for module_item in json_data:
                 for element in module_item.get("elements", []):
-                    json_locators[element["name"]] = element.get("locator", "")
-
-        # 2. 从 Python 代码结构开始，用 JSON 值填充
+                    json_map[element["name"]] = element
         unified_config = code_structure.copy()
-
         for module_item in unified_config:
             for element in module_item["elements"]:
                 name = element["name"]
-                # 如果 JSON 中有该元素的定位值，则使用 JSON 的值
-                if name in json_locators:
-                    element["locator"] = json_locators[name]
-
+                if name in json_map:
+                    element["locator"] = json_map[name].get("locator", "")
+                    element["position"] = json_map[name].get("position", "当前元素")
+                    element["index"] = json_map[name].get("index", "1")
+                else:
+                    if "position" not in element: element["position"] = "当前元素"
+                    if "index" not in element: element["index"] = "1"
         return unified_config
 
-    # --- 1. 配置加载与保存 ---
     def load_config(self):
-        """从 ConfigManager 加载配置，并初始化运行时值"""
-
         config = config_manager.load_config()
         default_config = config_manager.default_config
-
         self.all_accounts = config.get("ACCOUNTS", [])
-
-        # 使用统一方法加载配置
         self.element_config = self._unify_element_config(
             default_config.get("ELEMENT_CONFIG", []),
-            config.get("ELEMENT_CONFIG_FROM_FILE", [])  # 从临时存储中获取 JSON 文件数据
+            config.get("ELEMENT_CONFIG_FROM_FILE", [])
         )
-
-        # 加载运行时值
         self.runtime_url = self.config_settings.value('url', config.get("LOGIN_URL"))
         self.runtime_org_code = self.config_settings.value('org_code', config.get("ORG_CODE"))
         self.sku_file_path = self.config_settings.value('sku_file_path', config.get("SKU_FILE_PATH"))
         self.runtime_start_point = self.config_settings.value('start_point', '完整流程 (从登录开始)')
+        self.runtime_headless = self.config_settings.value('headless', 'false') == 'true'
+        self.runtime_run_mode = self.config_settings.value('run_mode', '模式一：自动导出 (按分类)')
 
-        # 加载上一次选择的账号名称
         first_account_name = self.all_accounts[0]['name'] if self.all_accounts else ''
         self.runtime_selected_account_name = self.config_settings.value('last_selected_account', first_account_name)
 
     def save_config(self):
-        """将当前的配置状态保存到 ConfigManager 和 QSettings"""
-
-        if self.element_fields:
+        if self.element_widgets:
             element_config_data = self.get_table_data()
         else:
             element_config_data = self.element_config
@@ -149,7 +352,6 @@ class AutomationToolUI(QMainWindow):
         else:
             QMessageBox.critical(self, "保存错误", "保存配置文件时出错。请查看日志。")
 
-        # 保存运行时参数到 QSettings
         if self.runtime_selected_account_name:
             self.config_settings.setValue('last_selected_account', self.runtime_selected_account_name)
 
@@ -157,26 +359,24 @@ class AutomationToolUI(QMainWindow):
         self.config_settings.setValue('org_code', self.org_code_input.text())
         self.config_settings.setValue('sku_file_path', self.file_path_input.text())
         self.config_settings.setValue('start_point', self.start_point_combo.currentText())
+        self.config_settings.setValue('headless', str(self.headless_checkbox.isChecked()).lower())
+        self.config_settings.setValue('run_mode', self.mode_combo.currentText())
 
-    # --- 2. 账号档案管理逻辑 (省略) ---
+    # ... (UI 辅助方法省略) ...
     def load_account_profiles_to_ui(self):
-        # ... (与之前一致) ...
         for i in reversed(range(self.account_list_layout.count())):
             widget_to_remove = self.account_list_layout.itemAt(i).widget()
-            if widget_to_remove:
-                widget_to_remove.setParent(None)
-
+            if widget_to_remove: widget_to_remove.setParent(None)
         if self.all_accounts:
             for account in self.all_accounts:
                 btn = QPushButton(account["name"])
                 btn.setProperty("account_name", account["name"])
                 btn.clicked.connect(lambda checked, name=account["name"]: self.select_account_profile_by_name(name))
                 self.account_list_layout.addWidget(btn)
-
             self.select_account_profile_by_name(self.runtime_selected_account_name, initial_load=True)
             self.delete_account_button.setEnabled(True)
         else:
-            no_account_label = QLabel("无可用账号档案。请在下方输入并保存新档案。")
+            no_account_label = QLabel("无可用账号档案。")
             self.account_list_layout.addWidget(no_account_label)
             self.account_name_input.clear()
             self.username_input.clear()
@@ -185,13 +385,9 @@ class AutomationToolUI(QMainWindow):
             self.runtime_selected_account_name = ''
 
     def select_account_profile_by_name(self, name, initial_load=False):
-        # ... (与之前一致) ...
         selected_account = None
         for account in self.all_accounts:
-            if account["name"] == name:
-                selected_account = account
-                break
-
+            if account["name"] == name: selected_account = account; break
         for i in range(self.account_list_layout.count()):
             widget = self.account_list_layout.itemAt(i).widget()
             if isinstance(widget, QPushButton):
@@ -199,16 +395,13 @@ class AutomationToolUI(QMainWindow):
                     widget.setStyleSheet("background-color: #AECBFA; font-weight: bold;")
                 else:
                     widget.setStyleSheet("")
-
         if selected_account:
             self.account_name_input.setText(selected_account.get("name", ""))
             self.username_input.setText(selected_account.get("username", ""))
             self.password_input.setText(selected_account.get("password", ""))
             self.delete_account_button.setEnabled(True)
             self.runtime_selected_account_name = name
-
-            if not initial_load:
-                self.save_config()
+            if not initial_load: self.save_config()
         else:
             self.account_name_input.clear()
             self.username_input.clear()
@@ -217,56 +410,35 @@ class AutomationToolUI(QMainWindow):
             self.runtime_selected_account_name = ''
 
     def save_current_account(self):
-        # ... (与之前一致) ...
         name = self.account_name_input.text().strip()
         username = self.username_input.text().strip()
         password = self.password_input.text().strip()
-
         if not name or not username or not password:
-            QMessageBox.warning(self, "保存失败", "档案名称、账号和密码都不能为空。")
+            QMessageBox.warning(self, "保存失败", "所有字段都不能为空。")
             return
-
         existing_index = -1
         for i, account in enumerate(self.all_accounts):
-            if account["name"] == name:
-                existing_index = i
-                break
-
-        new_account = {
-            "name": name,
-            "username": username,
-            "password": password
-        }
-
+            if account["name"] == name: existing_index = i; break
+        new_account = {"name": name, "username": username, "password": password}
         if existing_index != -1:
             self.all_accounts[existing_index] = new_account
             self.log(f"账号档案 '{name}' 已更新。", "blue")
         else:
             self.all_accounts.append(new_account)
             self.log(f"账号档案 '{name}' 已新增。", "blue")
-
         self.save_config()
         self.load_account_profiles_to_ui()
         self.select_account_profile_by_name(name)
 
     def delete_current_account(self):
-        # ... (与之前一致) ...
         current_name = self.account_name_input.text().strip()
-        if not current_name or not self.runtime_selected_account_name:
-            QMessageBox.warning(self, "删除失败", "请选择一个有效的账号档案。")
-            return
-
-        reply = QMessageBox.question(self, '确认删除',
-                                     f"确定要删除账号档案 '{current_name}' 吗?", QMessageBox.Yes |
-                                     QMessageBox.No, QMessageBox.No)
-
-        if reply == QMessageBox.Yes:
+        if not current_name: return
+        if QMessageBox.question(self, '确认删除', f"确定要删除 '{current_name}' 吗?",
+                                QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
             self.all_accounts = [acc for acc in self.all_accounts if acc["name"] != current_name]
-
-            self.log(f"账号档案 '{current_name}' 已删除。", "blue")
+            self.log(f"已删除。", "blue")
             self.runtime_selected_account_name = ''
             self.save_config()
-
             self.load_account_profiles_to_ui()
             if self.all_accounts:
                 self.select_account_profile_by_name(self.all_accounts[0]['name'])
@@ -274,26 +446,15 @@ class AutomationToolUI(QMainWindow):
                 self.select_account_profile_by_name('')
 
     def open_file_dialog(self):
-        # ... (与之前一致) ...
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "选择 SKU 列表文件",
-            "",
-            "Excel/CSV 文件 (*.xlsx *.csv);;所有文件 (*)"
-        )
+        file_path, _ = QFileDialog.getOpenFileName(self, "选择文件", "", "Excel/CSV (*.xlsx *.csv);;All (*)")
         if file_path:
             self.file_path_input.setText(file_path)
             self.save_config()
 
-    # --- 3. 操作页面 (Operation Panel) ---
     def create_operation_page(self):
         op_page = QWidget()
         self.tab_widget.addTab(op_page, "操作执行")
-
         layout = QFormLayout(op_page)
-        layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
-
-        # 账号管理 UI 布局 (与之前一致)
         layout.addRow(QLabel("--- 账号档案配置 ---"))
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
@@ -301,79 +462,64 @@ class AutomationToolUI(QMainWindow):
         self.account_list_layout = QVBoxLayout(account_list_widget)
         self.account_list_layout.setAlignment(Qt.AlignTop)
         scroll_area.setWidget(account_list_widget)
-        scroll_area.setMaximumHeight(150)
-        layout.addRow("所有账号档案:", scroll_area)
-
+        scroll_area.setMaximumHeight(100)
+        layout.addRow(scroll_area)
         self.account_name_input = QLineEdit()
         layout.addRow("档案名称:", self.account_name_input)
         self.username_input = QLineEdit()
         self.password_input = QLineEdit()
         self.password_input.setEchoMode(QLineEdit.Password)
-        layout.addRow("账号 (Username):", self.username_input)
-        layout.addRow("密码 (Password):", self.password_input)
-
-        account_button_layout = QHBoxLayout()
-        self.save_account_button = QPushButton("保存/更新当前档案")
+        layout.addRow("账号:", self.username_input)
+        layout.addRow("密码:", self.password_input)
+        account_btns = QHBoxLayout()
+        self.save_account_button = QPushButton("保存档案")
         self.save_account_button.clicked.connect(self.save_current_account)
-        self.delete_account_button = QPushButton("删除当前档案")
+        self.delete_account_button = QPushButton("删除档案")
         self.delete_account_button.clicked.connect(self.delete_current_account)
-
-        account_button_layout.addWidget(self.save_account_button)
-        account_button_layout.addWidget(self.delete_account_button)
-        layout.addRow(account_button_layout)
-
-        # 运行参数 (与之前一致)
+        account_btns.addWidget(self.save_account_button)
+        account_btns.addWidget(self.delete_account_button)
+        layout.addRow(account_btns)
         layout.addRow(QLabel("--- 运行参数 ---"))
-
         self.url_input = QLineEdit(self.runtime_url)
         layout.addRow("目标 URL:", self.url_input)
-
         self.org_code_input = QLineEdit(self.runtime_org_code)
-        layout.addRow("组织代码 (如: 156):", self.org_code_input)
-
-        sku_path_layout = QHBoxLayout()
+        layout.addRow("组织代码:", self.org_code_input)
+        path_layout = QHBoxLayout()
         self.file_path_input = QLineEdit(self.sku_file_path)
         self.file_path_input.setReadOnly(True)
-        select_file_button = QPushButton("选择文件...")
-        select_file_button.clicked.connect(self.open_file_dialog)
-
-        sku_path_layout.addWidget(self.file_path_input)
-        sku_path_layout.addWidget(select_file_button)
-        layout.addRow("SKU 列表文件路径:", sku_path_layout)
-
+        f_btn = QPushButton("...")
+        f_btn.clicked.connect(self.open_file_dialog)
+        f_btn.setMaximumWidth(30)
+        path_layout.addWidget(self.file_path_input)
+        path_layout.addWidget(f_btn)
+        layout.addRow("SKU 文件:", path_layout)
         self.start_point_combo = QComboBox()
-        self.start_point_combo.addItem("完整流程 (从登录开始)")
-        self.start_point_combo.addItem("跳过登录/组织选择 (从导航开始)")
-
-        index = self.start_point_combo.findText(self.runtime_start_point)
-        if index != -1:
-            self.start_point_combo.setCurrentIndex(index)
-
-        layout.addRow("自动化起始点:", self.start_point_combo)
-
-        # 执行按钮和日志区域 (与之前一致)
-        self.execute_button = QPushButton("开始执行 Edge 自动化")
-        self.execute_button.setFont(QFont('Arial', 12, QFont.Bold))
+        self.start_point_combo.addItems(["完整流程 (从登录开始)", "跳过登录/组织选择 (从导航开始)"])
+        idx = self.start_point_combo.findText(self.runtime_start_point)
+        if idx != -1: self.start_point_combo.setCurrentIndex(idx)
+        layout.addRow("起始点:", self.start_point_combo)
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["模式一：自动导出 (按分类)", "模式二：人工筛选 (抓取所有)"])
+        mode_idx = self.mode_combo.findText(self.runtime_run_mode)
+        if mode_idx != -1: self.mode_combo.setCurrentIndex(mode_idx)
+        layout.addRow("运行模式:", self.mode_combo)
+        self.headless_checkbox = QCheckBox("后台静默运行 (无浏览器窗口)")
+        self.headless_checkbox.setChecked(self.runtime_headless)
+        layout.addRow("", self.headless_checkbox)
+        self.execute_button = QPushButton("开始执行")
         self.execute_button.clicked.connect(self.start_automation)
-
-        self.save_button = QPushButton("保存所有配置")
+        self.save_button = QPushButton("保存配置")
         self.save_button.clicked.connect(self.save_config)
-
-        button_layout = QHBoxLayout()
-        button_layout.addWidget(self.save_button)
-        button_layout.addWidget(self.execute_button)
-        layout.addRow(button_layout)
-
-        log_label = QLabel("执行日志:")
+        btns = QHBoxLayout()
+        btns.addWidget(self.save_button)
+        btns.addWidget(self.execute_button)
+        layout.addRow(btns)
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
-        layout.addRow(log_label)
-        layout.addRow(self.log_output)
-
+        layout.addRow(QLabel("日志:"), self.log_output)
         self.load_account_profiles_to_ui()
 
     def log(self, message, color="black"):
-        """实时日志输出"""
         fmt = QTextCharFormat()
         if color == "red":
             fmt.setForeground(Qt.red)
@@ -383,308 +529,474 @@ class AutomationToolUI(QMainWindow):
             fmt.setForeground(Qt.blue)
         else:
             fmt.setForeground(Qt.black)
-
         cursor = self.log_output.textCursor()
         cursor.movePosition(QTextCursor.End)
         cursor.insertText(f"{message}\n", fmt)
         self.log_output.ensureCursorVisible()
-
         QApplication.processEvents()
 
-    # 【新增方法：读取 SKU 文件】 (与之前一致)
     def _read_skus_from_file(self, file_path):
-        """从用户指定的表格文件读取 SKU 列表。只读取第一列，跳过第一行（标题）"""
-
         if not os.path.exists(file_path):
-            self.log(f"ERROR: SKU 文件未找到: {file_path}", "red")
+            self.log(f"ERROR: 文件未找到: {file_path}", "red")
             return []
-
         try:
-            if file_path.endswith('.xlsx'):
-                workbook = openpyxl.load_workbook(file_path)
-                sheet = workbook.active
-                skus = []
-                for row_idx, row in enumerate(sheet.iter_rows(min_col=1, max_col=1, values_only=True)):
-                    if row_idx == 0:
-                        continue
-                    if row[0] is not None:
-                        skus.append(str(row[0]).strip())
-                return [sku for sku in skus if sku]
-            else:
-                self.log("ERROR: 暂不支持该文件类型。请选择 .xlsx 文件。", "red")
-                return []
-
+            wb = openpyxl.load_workbook(file_path)
+            ws = wb.active
+            skus = []
+            for i, row in enumerate(ws.iter_rows(min_col=1, max_col=1, values_only=True)):
+                if i == 0: continue
+                if row[0]: skus.append(str(row[0]).strip())
+            return skus
         except Exception as e:
-            self.log(f"ERROR: 读取 SKU 文件失败: {e}", "red")
+            self.log(f"读取错误: {e}", "red")
             return []
 
-    # --- 4. 自动化执行核心 ---
-    def _get_locator(self, parsed_config, element_name):
-        """安全地从配置中获取定位器"""
+    def _smart_find_element(self, driver, wait, element_name, parsed_config):
         if element_name not in parsed_config:
-            raise KeyError(f"元素 '{element_name}' 未在配置页面中定义。请检查 config_manager.py 和元素配置。")
-        return parsed_config[element_name]
+            raise KeyError(f"未找到元素配置: {element_name}")
+        config = parsed_config[element_name]
+        locator = config['locator_tuple']
+        position = config.get('position', '当前元素')
+        try:
+            index = int(config.get('index', 1))
+        except:
+            index = 1
+        target_element = None
+        if index > 1:
+            def elements_count_enough(d):
+                eles = d.find_elements(*locator)
+                return eles if len(eles) >= index else False
+
+            found_elements = wait.until(elements_count_enough)
+            base_element = found_elements[index - 1]
+        else:
+            base_element = wait.until(EC.presence_of_element_located(locator))
+        if position == "当前元素":
+            target_element = base_element
+        elif position == "父元素":
+            target_element = base_element.find_element(By.XPATH, "./..")
+        elif position == "子元素":
+            target_element = base_element.find_element(By.XPATH, "./*[1]")
+        elif position == "上一个":
+            target_element = base_element.find_element(By.XPATH, "preceding-sibling::*[1]")
+        elif position == "下一个":
+            target_element = base_element.find_element(By.XPATH, "following-sibling::*[1]")
+        else:
+            target_element = base_element
+        return target_element
+
+    def _update_request_session(self, driver):
+        self.log("正在同步浏览器 Cookie...", "blue")
+        selenium_cookies = driver.get_cookies()
+        self.image_session.cookies.clear()
+        self.image_session.headers.update({
+            "User-Agent": driver.execute_script("return navigator.userAgent")
+        })
+        for cookie in selenium_cookies:
+            self.image_session.cookies.set(cookie['name'], cookie['value'])
+        self.log("Cookie 同步完成。", "green")
 
     def _execute_login_flow(self, driver, wait, parsed_config, url, username, password, org_code):
-        # ... (登录流程) ...
         self.log(f"1. 访问 URL: {url}...")
         driver.get(url)
-
         self.log(f"2. 输入账号和密码...")
-        wait.until(EC.presence_of_element_located(self._get_locator(parsed_config, '账号输入框'))).send_keys(username)
-        wait.until(EC.presence_of_element_located(self._get_locator(parsed_config, '密码输入框'))).send_keys(password)
-
+        ele_user = self._smart_find_element(driver, wait, '账号输入框', parsed_config)
+        ele_user.send_keys(username)
+        ele_pass = self._smart_find_element(driver, wait, '密码输入框', parsed_config)
+        ele_pass.send_keys(password)
         self.log("3. 点击登录按钮...")
-        wait.until(EC.element_to_be_clickable(self._get_locator(parsed_config, '登录按钮'))).click()
-
+        ele_login = self._smart_find_element(driver, wait, '登录按钮', parsed_config)
+        ele_login.click()
         self.log("4. 等待组织选择弹窗...")
-        wait.until(EC.presence_of_element_located(self._get_locator(parsed_config, '组织选择弹窗')))
+        self._smart_find_element(driver, wait, '组织选择弹窗', parsed_config)
         self.log("组织选择弹窗已出现。", "green")
-
         self.log(f"5. 输入组织代码: {org_code}")
-        org_input = wait.until(EC.presence_of_element_located(self._get_locator(parsed_config, '组织输入框')))
-        org_input.send_keys(org_code)
-
-        list_item_by, list_item_value = self._get_locator(parsed_config, '组织列表项')
-        dynamic_list_item_value = list_item_value.replace('156', org_code)
-        dynamic_list_item_locator = (list_item_by, dynamic_list_item_value)
-
-        self.log(f"6. 等待并点击组织列表项 (定位: {dynamic_list_item_locator[1]})")
-        wait.until(EC.element_to_be_clickable(dynamic_list_item_locator)).click()
-
+        ele_org_input = self._smart_find_element(driver, wait, '组织输入框', parsed_config)
+        ele_org_input.send_keys(org_code)
+        org_item_config = parsed_config['组织列表项'].copy()
+        original_locator = org_item_config['locator_tuple']
+        if '156' in original_locator[1]:
+            new_value = original_locator[1].replace('156', org_code)
+            org_item_config['locator_tuple'] = (original_locator[0], new_value)
+            parsed_config['组织列表项_动态'] = org_item_config
+            self.log(f"6. 点击组织列表项...")
+            ele_org_item = self._smart_find_element(driver, wait, '组织列表项_动态', parsed_config)
+            driver.execute_script("arguments[0].click();", ele_org_item)
+        else:
+            ele_org_item = self._smart_find_element(driver, wait, '组织列表项', parsed_config)
+            driver.execute_script("arguments[0].click();", ele_org_item)
         self.log("7. 点击确认登录按钮...")
-        wait.until(EC.element_to_be_clickable(self._get_locator(parsed_config, '确认登录按钮'))).click()
-
+        ele_confirm = self._smart_find_element(driver, wait, '确认登录按钮', parsed_config)
+        ele_confirm.click()
         self.log("8. 等待跳转到首页...")
         wait.until(EC.url_contains("home_page"))
-
         self.log("完整登录和组织选择流程成功完成！", "green")
 
     def _execute_navigation_to_product_list(self, driver, wait, parsed_config):
-        # ... (导航流程) ...
         self.log("9. 执行导航流程: 鼠标悬停...")
-
-        nav_icon_locator = self._get_locator(parsed_config, '导航_商品主图标')
-        list_link_locator = self._get_locator(parsed_config, '导航_分销商品列表')
-
-        # 【关键修复：使用 visibility_of_element_located】
-        nav_icon_element = wait.until(EC.visibility_of_element_located(nav_icon_locator))
-        ActionChains(driver).move_to_element(nav_icon_element).perform()
-
-        self.log("悬停成功，等待子菜单出现...")
-
+        nav_icon = self._smart_find_element(driver, wait, '导航_商品主图标', parsed_config)
+        wait.until(EC.visibility_of(nav_icon))
+        ActionChains(driver).move_to_element(nav_icon).perform()
+        self.log("悬停成功，等待子菜单...")
+        time.sleep(0.5)
         self.log("10. 点击 '分销商品列表'...")
-        wait.until(EC.element_to_be_clickable(list_link_locator)).click()
-
-        self.log("11. 导航完成，等待页面加载...")
-        self.log("导航到 '分销商品列表' 成功。", "green")
-
-    def _capture_detail_info(self, driver, wait, parsed_config):
-        # ... (数据抓取流程) ...
-        self.log("15. 抓取数据流程开始...")
-
-        view_detail_locator = self._get_locator(parsed_config, 'product_list_view_detail_button')
-        detail_dialog_locator = self._get_locator(parsed_config, 'detail_popup_dialog')
-        detail_table_locator = self._get_locator(parsed_config, 'detail_info_table')
-
-        self.log("16. 点击 '查看详情' 按钮...")
-        wait.until(EC.element_to_be_clickable(view_detail_locator)).click()
-
-        self.log("17. 等待详情弹窗出现...")
-        wait.until(EC.visibility_of_element_located(detail_dialog_locator))
-
-        self.log("18. 抓取详情表格内容...")
-        detail_table_element = wait.until(EC.presence_of_element_located(detail_table_locator))
-
-        captured_data = detail_table_element.text
-
-        # 关闭弹窗（模拟点击 ESC 键）
-        driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
-
-        # 显式等待弹窗消失
-        wait.until(EC.invisibility_of_element_located(detail_dialog_locator))
-
-        self.log("详情信息抓取完成，并关闭弹窗。", "green")
-
-        return captured_data
+        nav_link = self._smart_find_element(driver, wait, '导航_分销商品列表', parsed_config)
+        try:
+            short_wait = WebDriverWait(driver, 5)
+            short_wait.until(EC.visibility_of(nav_link))
+            short_wait.until(EC.element_to_be_clickable(nav_link)).click()
+        except TimeoutException:
+            self.log("子菜单未显示，尝试 JS 强制点击...", "blue")
+            driver.execute_script("arguments[0].click();", nav_link)
+        self.log("11. 移开鼠标...", "blue")
+        try:
+            body = driver.find_element(By.TAG_NAME, "body")
+            ActionChains(driver).move_to_element_with_offset(body, 0, 0).perform()
+        except:
+            pass
+        self.log("12. 导航完成。", "green")
 
     def _execute_product_search(self, driver, wait, parsed_config, sku_value):
-        # ... (查询流程) ...
         self.log("12. 执行商品查询流程...")
-
-        sku_input_locator = self._get_locator(parsed_config, 'product_list_sku_input')
-        search_button_locator = self._get_locator(parsed_config, 'product_list_search_button')
-
         self.log(f"13. 输入 SKU: {sku_value}")
-        sku_element = wait.until(EC.visibility_of_element_located(sku_input_locator))
-        sku_element.clear()
-        sku_element.send_keys(sku_value)
-
+        inp = self._smart_find_element(driver, wait, 'product_list_sku_input', parsed_config)
+        inp.clear()
+        inp.send_keys(sku_value)
         self.log("14. 点击 '查询' 按钮...")
-        wait.until(EC.element_to_be_clickable(search_button_locator)).click()
+        btn = self._smart_find_element(driver, wait, 'product_list_search_button', parsed_config)
+        try:
+            btn.click()
+        except:
+            self.log("普通点击失败，转为 JS 点击...", "blue")
+            driver.execute_script("arguments[0].click();", btn)
+        self.log("查询指令已发送，等待结果刷新...", "blue")
+        time.sleep(2)
 
-        self.log("查询指令已发送，等待结果加载...")
+        try:
+            sku_locator = (By.XPATH, f"//*[contains(text(), '{sku_value}')]")
+            wait.until(EC.presence_of_element_located(sku_locator))
+            self.log(f"校验通过：页面已显示 SKU {sku_value}", "green")
+        except TimeoutException:
+            self.log(f"⚠️ 警告：等待 5 秒后页面仍未显示 SKU {sku_value}，可能查询无结果。", "red")
+            time.sleep(2)
 
-        self.log("商品查询流程成功完成。", "green")
+    def _capture_detail_info(self, driver, wait, parsed_config, mode="auto"):
+        self.log("15. 抓取数据流程开始...")
+        btn_detail = self._smart_find_element(driver, wait, 'product_list_view_detail_button', parsed_config)
+        driver.execute_script("arguments[0].click();", btn_detail)
+        self.log("17. 等待详情弹窗加载...")
+        popup = self._smart_find_element(driver, wait, 'detail_popup_dialog', parsed_config)
+        wait.until(EC.visibility_of(popup))
+        self.log("等待图片加载...", "blue")
+        time.sleep(1)
+        try:
+            driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", popup)
+        except:
+            pass
+        time.sleep(1)
+        self.log("18. 正在解析数据...", "blue")
+
+        raw_info = {}
+        ordered_keys = []
+        try:
+            table_element = popup.find_element(By.TAG_NAME, "table")
+            rows = table_element.find_elements(By.TAG_NAME, "tr")
+            for row in rows:
+                cells = row.find_elements(By.TAG_NAME, "td")
+                if len(cells) >= 2:
+                    key = cells[0].text.strip().replace(':', '').replace('：', '')
+                    if "FAQ" in key.upper(): continue
+                    value = cells[1].text.strip()
+                    raw_info[key] = value
+                    ordered_keys.append(key)
+        except Exception as e:
+            self.log(f"表格解析出错: {e}", "black")
+
+        final_text_info = self._process_text_info(raw_info, ordered_keys)
+        image_data = {}
+        all_images = []
+
+        if "按分类" in mode:
+            image_categories = ['全家福', '主图', '细节图', '尺寸图', '卖点图', '其他图']
+            for category in image_categories:
+                try:
+                    xpath = f".//h5[contains(., '{category}')]/following-sibling::div[1]//img"
+                    imgs = popup.find_elements(By.XPATH, xpath)
+                    if imgs:
+                        src = imgs[0].get_attribute('src')
+                        if src and "empty" not in src:
+                            image_data[category] = src
+                        else:
+                            image_data[category] = ""
+                    else:
+                        image_data[category] = ""
+                except:
+                    image_data[category] = ""
+        else:
+            try:
+                imgs = popup.find_elements(By.TAG_NAME, "img")
+                for img in imgs:
+                    src = img.get_attribute('src')
+                    if src and len(src) > 20 and "empty" not in src:
+                        all_images.append(src)
+            except Exception as e:
+                self.log(f"图片抓取出错: {e}", "red")
+
+        close_btn = self._smart_find_element(driver, wait, 'detail_close_button', parsed_config)
+        try:
+            close_btn.click()
+        except:
+            driver.execute_script("arguments[0].click();", close_btn)
+        try:
+            wait.until(EC.invisibility_of_element(popup))
+        except:
+            pass
+        self.log("详情信息抓取完成。", "green")
+        return {
+            "text_info": final_text_info,
+            "image_data": image_data,
+            "all_images": all_images
+        }
+
+    def _process_text_info(self, raw_info, ordered_keys):
+        new_info = {}
+        desc_parts = []
+        merge_keys = ['Specification', 'Package List', 'Note']
+        for key in ordered_keys:
+            if key in merge_keys:
+                val = raw_info.get(key)
+                if val: desc_parts.append(f"{key}: {val}")
+                continue
+            if key == 'Features':
+                features_text = raw_info.get(key, "")
+                parts = re.split(r'\d+、', features_text)
+                clean_parts = [p.strip() for p in parts if p.strip()]
+                for i in range(5):
+                    key_name = f"五点{i + 1}"
+                    val = clean_parts[i] if i < len(clean_parts) else ""
+                    new_info[key_name] = val
+                continue
+            new_info[key] = raw_info.get(key, "")
+        if desc_parts:
+            new_info['描述'] = "\n".join(desc_parts)
+        return new_info
 
     def start_automation(self):
-        # ... (主流程) ...
         if not SELENIUM_AVAILABLE:
-            self.log("ERROR: Selenium 库未安装。请先安装。", "red")
+            self.log("ERROR: Selenium 未安装。", "red")
             return
-
         self.log("--- 自动化执行开始 ---", "blue")
         self.save_config()
-
         url = self.url_input.text()
         username = self.username_input.text()
         password = self.password_input.text()
         org_code = self.org_code_input.text()
         sku_file_path = self.file_path_input.text()
         start_point = self.start_point_combo.currentText()
+        run_mode = self.mode_combo.currentText()
+        is_headless = self.headless_checkbox.isChecked()
 
         if start_point == "完整流程 (从登录开始)" and (not username or not password):
-            self.log(f"FATAL ERROR: 选择完整流程时，账号和密码不能为空。", "red")
+            self.log(f"FATAL ERROR: 账号密码不能为空。", "red")
             return
-
         config_data = self.get_table_data()
-
-        # 扁平化配置数据，方便查找 {"name": (By, value)}
         parsed_config = {}
         for module_item in config_data:
             for element in module_item.get("elements", []):
                 by, value = LocatorParser.parse(element["locator"])
                 if by and value:
-                    parsed_config[element["name"]] = (by, value)
-
-        # 读取 SKU 列表
+                    parsed_config[element["name"]] = {
+                        "locator_tuple": (by, value),
+                        "position": element.get("position", "当前元素"),
+                        "index": element.get("index", "1")
+                    }
         sku_list = self._read_skus_from_file(sku_file_path)
         if not sku_list:
-            self.log("FATAL ERROR: 未能从文件中读取到 SKU 列表，请检查文件路径和内容。", "red")
+            self.log("FATAL ERROR: 读取 SKU 失败。", "red")
             return
-
         self.log(f"成功读取 {len(sku_list)} 个 SKU。", "blue")
-
         try:
             service = Service()
-            driver = webdriver.Edge(service=service)
+            options = EdgeOptions()
+            if is_headless:
+                self.log("启用静默模式 (Headless)...", "blue")
+                options.add_argument("--headless")
+                options.add_argument("--disable-gpu")
+                options.add_argument("--window-size=1920,1080")
+            driver = webdriver.Edge(service=service, options=options)
+            if not is_headless: driver.maximize_window()
             self.log("Edge 浏览器启动成功。", "green")
         except Exception as e:
-            self.log(f"FATAL ERROR: Edge 浏览器启动失败。请确保安装了 Edge 浏览器并配置了 msedgedriver: {e}", "red")
+            self.log(f"FATAL ERROR: 浏览器启动失败: {e}", "red")
             return
 
         all_results = []
         try:
             wait = WebDriverWait(driver, 15)
-
-            # 流程控制
             if start_point == "完整流程 (从登录开始)":
                 self._execute_login_flow(driver, wait, parsed_config, url, username, password, org_code)
-
             elif start_point == "跳过登录/组织选择 (从导航开始)":
-                self.log("跳过登录/组织选择流程，直接从导航开始...", "blue")
+                self.log("直接从导航开始...", "blue")
                 driver.get(url.split('#')[0] + '#/product/distribution_list')
 
-                # 导航到商品列表页
+            self._update_request_session(driver)
             self._execute_navigation_to_product_list(driver, wait, parsed_config)
 
-            # 【核心逻辑：循环查询】
             for sku_idx, current_sku in enumerate(sku_list):
-                # 首次运行只测试第一个 SKU
-                if sku_idx > 0:
-                    break
+                self.log(f"\n--- 开始处理 SKU: {current_sku} ({sku_idx + 1}/{len(sku_list)}) ---", "blue")
+                try:
+                    self._execute_product_search(driver, wait, parsed_config, current_sku)
+                    capture_result = self._capture_detail_info(driver, wait, parsed_config, mode=run_mode)
+                    result_row = {"SKU": current_sku}
+                    result_row.update(capture_result)
+                    all_results.append(result_row)
+                    self.log(f"SKU {current_sku} 处理成功。", "green")
+                    time.sleep(1)
+                except Exception as e:
+                    error_msg = str(e).split('\n')[0]
+                    self.log(f"SKU {current_sku} 处理出错 (已跳过): {error_msg}", "red")
+                    all_results.append({"SKU": current_sku, "ERROR": "处理失败", "Details": error_msg})
+                    try:
+                        driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
+                    except:
+                        pass
 
-                self.log(f"\n--- 开始处理 SKU: {current_sku} ---", "blue")
+            self.log("\n自动化测试运行结束。", "green")
+            if "模式一" in run_mode:
+                self._handle_mode_one_export(all_results, sku_file_path)
+            else:
+                self._handle_mode_two_dialog(all_results, sku_file_path)
 
-                self._execute_product_search(driver, wait, parsed_config, current_sku)
-                captured_text = self._capture_detail_info(driver, wait, parsed_config)
-
-                all_results.append({
-                    "SKU": current_sku,
-                    "Captured_Text": captured_text
-                })
-
-                self.log(f"SKU {current_sku} 处理完成。", "green")
-
-            self.log("自动化测试运行成功。", "green")
-
-            # 结果展示
-            if all_results:
-                headers = ["SKU", "抓取到的详情文本"]
-                data = [[res["SKU"], res["Captured_Text"].replace('\n', ' | ')] for res in all_results]
-                dialog = ResultsTableDialog(data, headers, self)
-                dialog.exec_()
-
-
-        except KeyError as e:
-            self.log(f"FATAL ERROR: 自动化流程失败，因为配置中缺少 {e} 元素。请检查 config_manager.py 或配置页面。", "red")
         except Exception as e:
-            self.log(f"自动化执行中发生错误: {e}", "red")
+            self.log(f"执行中发生严重错误 (流程终止): {e}", "red")
+            import traceback
+            self.log(traceback.format_exc(), "black")
         finally:
-            self.log("请手动关闭 Edge 浏览器以结束。", "blue")
+            self.log("结束。", "blue")
 
-        self.log("--- 自动化执行结束 ---", "blue")
+    def _handle_mode_one_export(self, all_results, source_path):
+        self.log("正在执行自动导出...", "blue")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base_dir = os.path.dirname(source_path) if source_path else os.getcwd()
+        filename = f"自动抓取结果_{timestamp}.xlsx"
+        save_path = os.path.join(base_dir, filename)
+        workbook = xlsxwriter.Workbook(save_path)
+        worksheet = workbook.add_worksheet()
+        text_keys = []
+        for res in all_results:
+            for k in res.get('text_info', {}).keys():
+                if k not in text_keys: text_keys.append(k)
+        img_keys = ['全家福', '主图', '细节图', '尺寸图', '卖点图', '其他图']
+        headers = ["SKU"] + text_keys + img_keys + ["ERROR"]
+        header_format = workbook.add_format({'bold': True, 'bg_color': '#D7E4BC', 'border': 1})
+        center_format = workbook.add_format({'valign': 'vcenter', 'border': 1})
+        wrap_format = workbook.add_format({'valign': 'vcenter', 'border': 1, 'text_wrap': True})
+        for idx, h in enumerate(headers):
+            worksheet.write(0, idx, h, header_format)
+            if h in img_keys:
+                worksheet.set_column(idx, idx, 40)
+            elif "描述" in h:
+                worksheet.set_column(idx, idx, 40)
+            else:
+                worksheet.set_column(idx, idx, 20)
+        current_row = 1
+        for res in all_results:
+            worksheet.write(current_row, 0, res['SKU'], center_format)
+            col_offset = 1
+            for k in text_keys:
+                fmt = wrap_format if k == "描述" else center_format
+                worksheet.write(current_row, col_offset, res.get('text_info', {}).get(k, ""), fmt)
+                col_offset += 1
+            img_start_col = col_offset
+            for idx, k in enumerate(img_keys):
+                worksheet.write(current_row, img_start_col + idx, res.get('image_data', {}).get(k, ""), center_format)
+            err_col = img_start_col + len(img_keys)
+            if 'ERROR' in res:
+                worksheet.write(current_row, err_col, f"{res['ERROR']} - {res.get('Details', '')}", center_format)
+            else:
+                worksheet.write(current_row, err_col, "", center_format)
+            worksheet.set_row(current_row, 20)
+            current_row += 1
+        try:
+            workbook.close()
+            self.log(f"导出成功! 文件路径: {save_path}", "green")
+            QMessageBox.information(self, "完成", f"自动抓取完成。\n文件已保存至: {save_path}")
+        except Exception as e:
+            self.log(f"导出失败: {e}", "red")
 
-    # --- 5. 配置页面 (Configuration Panel) 【已模块化】---
+    def _handle_mode_two_dialog(self, all_results, source_path):
+        self.log("打开筛选窗口...", "blue")
+        dialog = ImageSelectorDialog(all_results, source_path, self.image_session, self)
+        dialog.exec_()
+
     def create_config_page(self):
         config_page = QWidget()
         self.tab_widget.addTab(config_page, "元素配置")
-
         layout = QVBoxLayout(config_page)
-
-        guide_label = QLabel("<b>智能定位指南:</b><br>"
-                             "1. <code>//div[@id='root']</code> 或 <code>.my-class</code> (直接 XPath/CSS)<br>"
-                             "2. <code>placeholder=\"请输入\"</code> (自动识别属性: key=\"value\")<br>"
-                             "3. <code>&lt;tag&gt;文本</code> (标签+文本: 精确匹配，忽略子标签)<br>"
-                             "4. <code>纯文本</code> (模糊匹配: 查找包含该文本的任何元素)")
-        guide_label.setTextFormat(Qt.RichText)
-        guide_label.setWordWrap(True)
-        layout.addWidget(guide_label)
-
-        # 模块化 UI 渲染
+        help_text = ("<b>配置指南:</b><br>"
+                     "1. <b>定位字符串:</b> 支持 XPath, class, 属性, 纯文本。<br>"
+                     "2. <b>位置:</b> 选择相对于定位元素的导航方向 (如父/子元素)。<br>"
+                     "3. <b>Index:</b> 如果定位到多个元素，选择第几个 (默认1)。")
+        layout.addWidget(QLabel(help_text))
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         config_container = QWidget()
         container_layout = QVBoxLayout(config_container)
-
-        self.element_fields = {}  # 存储 QLineEdit 控件引用
-
+        self.element_widgets = {}
         for module_item in self.element_config:
             module_name = module_item["module"]
             group_box = QGroupBox(module_name)
             group_layout = QFormLayout(group_box)
-
             for element in module_item["elements"]:
                 name = element["name"]
+                row_widget = QWidget()
+                row_layout = QHBoxLayout(row_widget)
+                row_layout.setContentsMargins(0, 0, 0, 0)
                 locator_input = QLineEdit(element["locator"])
-                self.element_fields[name] = locator_input
-                group_layout.addRow(name, locator_input)
-
+                locator_input.setPlaceholderText("定位字符串")
+                position_combo = QComboBox()
+                position_combo.addItems(["当前元素", "父元素", "子元素", "上一个", "下一个"])
+                position_combo.setCurrentText(element.get("position", "当前元素"))
+                position_combo.setFixedWidth(80)
+                index_input = QLineEdit(str(element.get("index", "1")))
+                index_input.setPlaceholderText("Idx")
+                from PyQt5.QtGui import QIntValidator
+                index_input.setValidator(QIntValidator(1, 999))
+                index_input.setFixedWidth(30)
+                row_layout.addWidget(locator_input, stretch=3)
+                row_layout.addWidget(position_combo, stretch=1)
+                row_layout.addWidget(index_input, stretch=0)
+                self.element_widgets[name] = {
+                    "locator": locator_input,
+                    "position": position_combo,
+                    "index": index_input
+                }
+                group_layout.addRow(name, row_widget)
             container_layout.addWidget(group_box)
-
         scroll_area.setWidget(config_container)
         layout.addWidget(scroll_area)
-
-        # 配置保存按钮
         save_config_button = QPushButton("保存元素配置")
         save_config_button.clicked.connect(self.save_config)
         layout.addWidget(save_config_button)
 
     def get_table_data(self):
-        """从 UI 元素中获取当前数据，并返回模块化结构"""
         updated_config = []
-
         for module_item in self.element_config:
             new_module = {"module": module_item["module"], "elements": []}
             for element in module_item["elements"]:
                 name = element["name"]
-                if name in self.element_fields:
-                    locator = self.element_fields[name].text()
-                    new_module["elements"].append({"name": name, "locator": locator})
+                widgets = self.element_widgets.get(name)
+                if widgets:
+                    new_element = {
+                        "name": name,
+                        "locator": widgets["locator"].text(),
+                        "position": widgets["position"].currentText(),
+                        "index": widgets["index"].text() or "1"
+                    }
+                    new_module["elements"].append(new_element)
                 else:
                     new_module["elements"].append(element)
             updated_config.append(new_module)
-
         return updated_config
 
 
