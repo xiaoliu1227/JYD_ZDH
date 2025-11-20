@@ -3,14 +3,13 @@ import os
 import openpyxl
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QTabWidget, QFormLayout, QScrollArea, QComboBox,
-                             QLineEdit, QPushButton, QLabel, QTableWidget, QDialog, QGroupBox,
-                             QTableWidgetItem, QHeaderView, QMessageBox, QTextEdit, QFileDialog)
+                             QLineEdit, QPushButton, QLabel, QDialog, QGroupBox,
+                             QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QTextEdit, QFileDialog)
 from PyQt5.QtCore import Qt, QSettings
 from PyQt5.QtGui import QFont, QTextCharFormat, QTextCursor
-from selenium.webdriver.common.by import By
 
-import config_manager
 # 导入配置管理器和定位解析器
+from config_manager import config_manager
 from edge_automation_tool import LocatorParser
 
 # 假设的自动化核心函数 (需要在实际环境中运行)
@@ -28,7 +27,7 @@ except ImportError:
     SELENIUM_AVAILABLE = False
 
 
-# 【新增类：结果展示模态对话框】
+# 【ResultsTableDialog 类】 (与之前一致，用于结果展示)
 class ResultsTableDialog(QDialog):
     def __init__(self, data, headers, parent=None):
         super().__init__(parent)
@@ -79,11 +78,10 @@ class AutomationToolUI(QMainWindow):
         self.create_operation_page()
         self.create_config_page()
 
-    # 【新增方法：数据结构统一】
+    # 【新增方法：数据结构统一（代码结构优先）】
     def _unify_element_config(self, code_structure, json_data):
         """
         将 JSON 文件中的定位值合并到 Python 代码定义的模块化结构中 (Python 结构优先)。
-        如果 JSON 中有缺失，则使用代码中的默认值（即保持原样）。
         """
 
         # 1. 扁平化 JSON 数据，方便查找 {"name": "locator"}
@@ -102,7 +100,6 @@ class AutomationToolUI(QMainWindow):
                 # 如果 JSON 中有该元素的定位值，则使用 JSON 的值
                 if name in json_locators:
                     element["locator"] = json_locators[name]
-                # 否则，保留代码中的默认值（通常是初始的定位值或空字符串）
 
         return unified_config
 
@@ -111,14 +108,14 @@ class AutomationToolUI(QMainWindow):
         """从 ConfigManager 加载配置，并初始化运行时值"""
 
         config = config_manager.load_config()
-        default_config = config_manager.default_config  # 获取 Python 代码定义的原始结构
+        default_config = config_manager.default_config
 
         self.all_accounts = config.get("ACCOUNTS", [])
 
-        # 【更新点 1：使用统一方法加载配置，保证代码结构优先】
+        # 使用统一方法加载配置
         self.element_config = self._unify_element_config(
             default_config.get("ELEMENT_CONFIG", []),
-            config.get("ELEMENT_CONFIG", [])
+            config.get("ELEMENT_CONFIG_FROM_FILE", [])  # 从临时存储中获取 JSON 文件数据
         )
 
         # 加载运行时值
@@ -134,18 +131,17 @@ class AutomationToolUI(QMainWindow):
     def save_config(self):
         """将当前的配置状态保存到 ConfigManager 和 QSettings"""
 
-        # 【更新点 2：从 UI 控件获取并以模块化结构保存】
         if self.element_fields:
             element_config_data = self.get_table_data()
         else:
-            element_config_data = self.element_config  # 如果UI控件还没加载，则保存内存中的结构
+            element_config_data = self.element_config
 
         data = {
             "LOGIN_URL": self.url_input.text(),
             "ORG_CODE": self.org_code_input.text(),
             "SKU_FILE_PATH": self.file_path_input.text(),
             "ACCOUNTS": self.all_accounts,
-            "ELEMENT_CONFIG": element_config_data  # 保存模块化结构
+            "ELEMENT_CONFIG": element_config_data
         }
 
         if config_manager.save_config(data):
@@ -162,7 +158,7 @@ class AutomationToolUI(QMainWindow):
         self.config_settings.setValue('sku_file_path', self.file_path_input.text())
         self.config_settings.setValue('start_point', self.start_point_combo.currentText())
 
-    # --- 2. 账号档案管理逻辑 (省略，与之前一致) ---
+    # --- 2. 账号档案管理逻辑 (省略) ---
     def load_account_profiles_to_ui(self):
         # ... (与之前一致) ...
         for i in reversed(range(self.account_list_layout.count())):
@@ -293,10 +289,11 @@ class AutomationToolUI(QMainWindow):
     def create_operation_page(self):
         op_page = QWidget()
         self.tab_widget.addTab(op_page, "操作执行")
-        # ... (UI 布局与之前一致) ...
+
         layout = QFormLayout(op_page)
         layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
+        # 账号管理 UI 布局 (与之前一致)
         layout.addRow(QLabel("--- 账号档案配置 ---"))
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
@@ -325,6 +322,7 @@ class AutomationToolUI(QMainWindow):
         account_button_layout.addWidget(self.delete_account_button)
         layout.addRow(account_button_layout)
 
+        # 运行参数 (与之前一致)
         layout.addRow(QLabel("--- 运行参数 ---"))
 
         self.url_input = QLineEdit(self.runtime_url)
@@ -353,7 +351,7 @@ class AutomationToolUI(QMainWindow):
 
         layout.addRow("自动化起始点:", self.start_point_combo)
 
-        # 执行按钮和日志区域
+        # 执行按钮和日志区域 (与之前一致)
         self.execute_button = QPushButton("开始执行 Edge 自动化")
         self.execute_button.setFont(QFont('Arial', 12, QFont.Bold))
         self.execute_button.clicked.connect(self.start_automation)
@@ -366,7 +364,6 @@ class AutomationToolUI(QMainWindow):
         button_layout.addWidget(self.execute_button)
         layout.addRow(button_layout)
 
-        # 日志输出区域
         log_label = QLabel("执行日志:")
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
@@ -394,25 +391,32 @@ class AutomationToolUI(QMainWindow):
 
         QApplication.processEvents()
 
-    # 【更新点 3：获取 UI 数据并返回模块化结构】
-    def get_table_data(self):
-        """从 UI 元素中获取当前数据，并返回模块化结构"""
-        updated_config = []
+    # 【新增方法：读取 SKU 文件】 (与之前一致)
+    def _read_skus_from_file(self, file_path):
+        """从用户指定的表格文件读取 SKU 列表。只读取第一列，跳过第一行（标题）"""
 
-        # 遍历内存中的结构，从 QLineEdit 控件中获取最新的值
-        for module_item in self.element_config:
-            new_module = {"module": module_item["module"], "elements": []}
-            for element in module_item["elements"]:
-                name = element["name"]
-                # 确保控件存在后再获取值
-                if name in self.element_fields:
-                    locator = self.element_fields[name].text()
-                    new_module["elements"].append({"name": name, "locator": locator})
-                else:
-                    new_module["elements"].append(element)  # 如果控件未加载，则使用内存中的旧值
-            updated_config.append(new_module)
+        if not os.path.exists(file_path):
+            self.log(f"ERROR: SKU 文件未找到: {file_path}", "red")
+            return []
 
-        return updated_config
+        try:
+            if file_path.endswith('.xlsx'):
+                workbook = openpyxl.load_workbook(file_path)
+                sheet = workbook.active
+                skus = []
+                for row_idx, row in enumerate(sheet.iter_rows(min_col=1, max_col=1, values_only=True)):
+                    if row_idx == 0:
+                        continue
+                    if row[0] is not None:
+                        skus.append(str(row[0]).strip())
+                return [sku for sku in skus if sku]
+            else:
+                self.log("ERROR: 暂不支持该文件类型。请选择 .xlsx 文件。", "red")
+                return []
+
+        except Exception as e:
+            self.log(f"ERROR: 读取 SKU 文件失败: {e}", "red")
+            return []
 
     # --- 4. 自动化执行核心 ---
     def _get_locator(self, parsed_config, element_name):
@@ -422,7 +426,7 @@ class AutomationToolUI(QMainWindow):
         return parsed_config[element_name]
 
     def _execute_login_flow(self, driver, wait, parsed_config, url, username, password, org_code):
-        # ... (登录流程不变) ...
+        # ... (登录流程) ...
         self.log(f"1. 访问 URL: {url}...")
         driver.get(url)
 
@@ -457,12 +461,13 @@ class AutomationToolUI(QMainWindow):
         self.log("完整登录和组织选择流程成功完成！", "green")
 
     def _execute_navigation_to_product_list(self, driver, wait, parsed_config):
-        # ... (导航流程不变) ...
+        # ... (导航流程) ...
         self.log("9. 执行导航流程: 鼠标悬停...")
 
         nav_icon_locator = self._get_locator(parsed_config, '导航_商品主图标')
         list_link_locator = self._get_locator(parsed_config, '导航_分销商品列表')
 
+        # 【关键修复：使用 visibility_of_element_located】
         nav_icon_element = wait.until(EC.visibility_of_element_located(nav_icon_locator))
         ActionChains(driver).move_to_element(nav_icon_element).perform()
 
@@ -475,32 +480,28 @@ class AutomationToolUI(QMainWindow):
         self.log("导航到 '分销商品列表' 成功。", "green")
 
     def _capture_detail_info(self, driver, wait, parsed_config):
-        """点击查看详情，等待弹窗，抓取详情表格中的所有文本信息"""
-
+        # ... (数据抓取流程) ...
         self.log("15. 抓取数据流程开始...")
 
         view_detail_locator = self._get_locator(parsed_config, 'product_list_view_detail_button')
         detail_dialog_locator = self._get_locator(parsed_config, 'detail_popup_dialog')
         detail_table_locator = self._get_locator(parsed_config, 'detail_info_table')
 
-        # 1. 点击查看详情按钮
         self.log("16. 点击 '查看详情' 按钮...")
         wait.until(EC.element_to_be_clickable(view_detail_locator)).click()
 
-        # 2. 等待详情弹窗出现
         self.log("17. 等待详情弹窗出现...")
         wait.until(EC.visibility_of_element_located(detail_dialog_locator))
 
-        # 3. 抓取详情表格数据
         self.log("18. 抓取详情表格内容...")
         detail_table_element = wait.until(EC.presence_of_element_located(detail_table_locator))
 
         captured_data = detail_table_element.text
 
-        # 4. 关闭弹窗（模拟点击 ESC 键）
+        # 关闭弹窗（模拟点击 ESC 键）
         driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
 
-        # 5. 显式等待弹窗消失（可选，但推荐）
+        # 显式等待弹窗消失
         wait.until(EC.invisibility_of_element_located(detail_dialog_locator))
 
         self.log("详情信息抓取完成，并关闭弹窗。", "green")
@@ -508,19 +509,17 @@ class AutomationToolUI(QMainWindow):
         return captured_data
 
     def _execute_product_search(self, driver, wait, parsed_config, sku_value):
-        """在商品列表页面执行 SKU 查询操作"""
+        # ... (查询流程) ...
         self.log("12. 执行商品查询流程...")
 
         sku_input_locator = self._get_locator(parsed_config, 'product_list_sku_input')
         search_button_locator = self._get_locator(parsed_config, 'product_list_search_button')
 
-        # 1. 等待 SKU 输入框出现并输入 SKU
         self.log(f"13. 输入 SKU: {sku_value}")
         sku_element = wait.until(EC.visibility_of_element_located(sku_input_locator))
         sku_element.clear()
         sku_element.send_keys(sku_value)
 
-        # 2. 点击查询按钮
         self.log("14. 点击 '查询' 按钮...")
         wait.until(EC.element_to_be_clickable(search_button_locator)).click()
 
@@ -582,7 +581,11 @@ class AutomationToolUI(QMainWindow):
             if start_point == "完整流程 (从登录开始)":
                 self._execute_login_flow(driver, wait, parsed_config, url, username, password, org_code)
 
-            # 导航到商品列表页 (无论是否跳过登录，都执行这步)
+            elif start_point == "跳过登录/组织选择 (从导航开始)":
+                self.log("跳过登录/组织选择流程，直接从导航开始...", "blue")
+                driver.get(url.split('#')[0] + '#/product/distribution_list')
+
+                # 导航到商品列表页
             self._execute_navigation_to_product_list(driver, wait, parsed_config)
 
             # 【核心逻辑：循环查询】
@@ -593,13 +596,9 @@ class AutomationToolUI(QMainWindow):
 
                 self.log(f"\n--- 开始处理 SKU: {current_sku} ---", "blue")
 
-                # 1. 执行查询
                 self._execute_product_search(driver, wait, parsed_config, current_sku)
-
-                # 2. 抓取信息
                 captured_text = self._capture_detail_info(driver, wait, parsed_config)
 
-                # 3. 存储结果
                 all_results.append({
                     "SKU": current_sku,
                     "Captured_Text": captured_text
@@ -633,7 +632,6 @@ class AutomationToolUI(QMainWindow):
 
         layout = QVBoxLayout(config_page)
 
-        # 帮助信息
         guide_label = QLabel("<b>智能定位指南:</b><br>"
                              "1. <code>//div[@id='root']</code> 或 <code>.my-class</code> (直接 XPath/CSS)<br>"
                              "2. <code>placeholder=\"请输入\"</code> (自动识别属性: key=\"value\")<br>"
@@ -643,7 +641,7 @@ class AutomationToolUI(QMainWindow):
         guide_label.setWordWrap(True)
         layout.addWidget(guide_label)
 
-        # 【更新点 4：模块化 UI 渲染】
+        # 模块化 UI 渲染
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         config_container = QWidget()
@@ -651,7 +649,6 @@ class AutomationToolUI(QMainWindow):
 
         self.element_fields = {}  # 存储 QLineEdit 控件引用
 
-        # 遍历模块化结构并创建 GroupBox
         for module_item in self.element_config:
             module_name = module_item["module"]
             group_box = QGroupBox(module_name)
@@ -660,7 +657,6 @@ class AutomationToolUI(QMainWindow):
             for element in module_item["elements"]:
                 name = element["name"]
                 locator_input = QLineEdit(element["locator"])
-                # 存储控件引用
                 self.element_fields[name] = locator_input
                 group_layout.addRow(name, locator_input)
 
@@ -669,10 +665,27 @@ class AutomationToolUI(QMainWindow):
         scroll_area.setWidget(config_container)
         layout.addWidget(scroll_area)
 
-        # 【更新点 5：配置保存按钮】
+        # 配置保存按钮
         save_config_button = QPushButton("保存元素配置")
         save_config_button.clicked.connect(self.save_config)
         layout.addWidget(save_config_button)
+
+    def get_table_data(self):
+        """从 UI 元素中获取当前数据，并返回模块化结构"""
+        updated_config = []
+
+        for module_item in self.element_config:
+            new_module = {"module": module_item["module"], "elements": []}
+            for element in module_item["elements"]:
+                name = element["name"]
+                if name in self.element_fields:
+                    locator = self.element_fields[name].text()
+                    new_module["elements"].append({"name": name, "locator": locator})
+                else:
+                    new_module["elements"].append(element)
+            updated_config.append(new_module)
+
+        return updated_config
 
 
 if __name__ == '__main__':

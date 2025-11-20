@@ -9,7 +9,7 @@ class LocatorParser:
     定位指南：
     1. //div[@id='root'] 或 .my-class (XPath/CSS) -> By.XPATH 或 By.CSS_SELECTOR
     2. 属性=\"值\" (属性定位) -> By.CSS_SELECTOR
-    3. <tag>文本 (标签+文本) -> By.XPATH (查找特定标签，使用 normalize-space(.) 忽略子标签，精确匹配文本)
+    3. <tag>文本 (标签+文本) -> By.XPATH (使用 normalize-space(.) 忽略子标签和空格，精确匹配文本)
     4. 纯文本 (Text) -> By.XPATH (查找任何标签内含特定文本，模糊匹配)
     """
 
@@ -31,7 +31,6 @@ class LocatorParser:
                 return (By.CSS_SELECTOR, locator_str)
 
         # --- 2. 属性=\"值\" 定位 (包含 = 和引号) ---
-        # 匹配 key="value" 或 key='value' 格式
         attr_match = re.match(r'^(\w+)=\"(.*?)\"$', locator_str) or re.match(r"^(\w+)='(.*?)'$", locator_str)
         if attr_match:
             attr_key = attr_match.group(1)
@@ -52,7 +51,6 @@ class LocatorParser:
             return (By.XPATH, xpath)
 
         # --- 4. 纯文本定位 (默认 fallback，模糊匹配) ---
-        # XPath: 查找包含该文本的任何元素 (模糊匹配)
         xpath = f"//*[contains(text(), '{locator_str}')]"
         print(f"解析定位器: '{locator_str}' -> By.XPATH (纯文本: {xpath})")
         return (By.XPATH, xpath)
