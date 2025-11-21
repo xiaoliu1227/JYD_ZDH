@@ -5,8 +5,16 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="c90cc5bf-1bba-4cb4-bae9-716dc1cf4ede" name="更改" comment="V1.0.0 &#10;初始版本 上传 1">
+      <change afterPath="$PROJECT_DIR$/产品自动刊登/ListingToolUI.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/文案自动优化/ai_copywriter_ui.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/获取产品信息/config_manager.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/获取产品信息/edge_automation_tool.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/获取产品信息/打包.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/打包.py" beforeDir="false" afterPath="$PROJECT_DIR$/打包.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/AutomationToolUI.py" beforeDir="false" afterPath="$PROJECT_DIR$/获取产品信息/AutomationToolUI.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/config_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/产品自动刊登/config_manager.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/edge_automation_tool.py" beforeDir="false" afterPath="$PROJECT_DIR$/产品自动刊登/edge_listing_tool.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/打包.py" beforeDir="false" afterPath="$PROJECT_DIR$/文案自动优化/打包.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -23,21 +31,21 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
-  "lastFilter": {
-    "state": "OPEN",
-    "assignee": "xiaoliu1227"
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;xiaoliu1227&quot;
   }
-}]]></component>
-  <component name="GithubPullRequestsUISettings"><![CDATA[{
-  "selectedUrlAndAccountId": {
-    "url": "https://github.com/xiaoliu1227/JYD_ZDH.git",
-    "accountId": "77769817-0529-40ca-abba-5ce60c4e5322"
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/xiaoliu1227/JYD_ZDH.git&quot;,
+    &quot;accountId&quot;: &quot;77769817-0529-40ca-abba-5ce60c4e5322&quot;
   }
-}]]></component>
-  <component name="ProjectColorInfo"><![CDATA[{
-  "associatedIndex": 1
-}]]></component>
+}</component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 1
+}</component>
   <component name="ProjectId" id="35dsziEymwtu51HTFgeIQt7bJZ7" />
   <component name="ProjectLevelVcsManager">
     <ConfirmationsSetting value="2" id="Add" />
@@ -51,6 +59,8 @@
     "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
     "ModuleVcsDetector.initialDetectionPerformed": "true",
     "Python.AutomationToolUI.executor": "Run",
+    "Python.ListingToolUI.executor": "Run",
+    "Python.ai_copywriter_ui.executor": "Run",
     "Python.config_manager.executor": "Run",
     "Python.main_app.executor": "Run",
     "Python.打包.executor": "Run",
@@ -59,9 +69,19 @@
     "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
     "RunOnceActivity.git.unshallow": "true",
     "SHARE_PROJECT_CONFIGURATION_FILES": "true",
-    "git-widget-placeholder": "master"
+    "git-widget-placeholder": "master",
+    "last_opened_file_path": "D:/python/JYD_ZDH/文案自动优化"
   }
 }]]></component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="D:\python\JYD_ZDH\文案自动优化" />
+      <recent name="D:\python\JYD_ZDH\产品自动刊登" />
+    </key>
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="D:\python\JYD_ZDH\获取产品信息" />
+    </key>
+  </component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
@@ -141,7 +161,15 @@
       <option name="project" value="LOCAL" />
       <updated>1763620808836</updated>
     </task>
-    <option name="localTasksCounter" value="9" />
+    <task id="LOCAL-00009" summary="V1.0.0 &#10;初始版本 上传 1">
+      <option name="closed" value="true" />
+      <created>1763624053627</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1763624053627</updated>
+    </task>
+    <option name="localTasksCounter" value="10" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
