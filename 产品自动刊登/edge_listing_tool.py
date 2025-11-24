@@ -194,31 +194,36 @@ class ListingWorker(QThread):
 
     def _force_close_any_popup(self, driver):
         try:
+            # 查找特定位置的弹窗
             popups = driver.find_elements(By.XPATH, "//body/div[@top='5vh']")
-            visible_popups = [p for p in popups if p.is_displayed()]
-            for pop in visible_popups:
+
+            for popup in popups:
+                if not popup.is_displayed():
+                    continue
+
+                # 尝试在当前弹窗和下一个div中查找取消按钮
+                elements_to_check = [popup]
+
+                # 添加下一个div sibling
                 try:
-                    cancel_btn = pop.find_element(By.XPATH, ".//button//span[contains(text(), '取消')]")
-                    driver.execute_script("arguments[0].click();", cancel_btn)
-                    time.sleep(0.5)
+                    next_div = popup.find_element(By.XPATH, "./following-sibling::div[1]")
+                    if next_div.is_displayed():
+                        elements_to_check.append(next_div)
                 except:
                     pass
-        except:
-            pass
 
-        try:
-            xpath = "//div[contains(@class, 'ivu-modal-wrap') and not(contains(@style, 'display: none'))]"
-            modals = driver.find_elements(By.XPATH, xpath)
-            for modal in modals:
-                txt = modal.get_attribute("textContent")
-                if "侵权" in txt or "敏感" in txt or "提示" in txt:
+                # 在这些元素中查找取消按钮
+                for element in elements_to_check:
                     try:
-                        cancel_btn = modal.find_element(By.XPATH, ".//button//span[contains(text(), '取消')]")
+                        cancel_btn = element.find_element(By.XPATH, ".//button//span[contains(text(), '取消')]")
                         driver.execute_script("arguments[0].click();", cancel_btn)
                         time.sleep(0.5)
+                        break  # 点击成功后跳出循环
                     except:
-                        pass
-        except:
+                        continue
+
+        except Exception:
+            # 可以记录日志，这里保持静默处理
             pass
 
     # ==========================================
@@ -426,7 +431,7 @@ class ListingWorker(QThread):
                     # 传入 current_site_index
                     self._check_action_buttons(driver, btn_mod, current_site_index)
 
-                self._force_close_any_popup(driver)
+                # self._force_close_any_popup(driver)
 
             except Exception as ex:
                 self.log_signal.emit(f"❌ 遍历异常: {ex}", "red")
@@ -457,18 +462,6 @@ class ListingWorker(QThread):
         # 2. 查找对应站点的 Span (第 site_index 个 span)
         try:
             spans = module_element.find_elements(By.TAG_NAME, "span")
-            # 注意：find_elements(By.TAG_NAME, "span") 会抓取所有后代 span，这可能有问题。
-            # 我们应该抓取第一层级的 div 或 span 容器。
-            # 根据描述：Button -> X Spans -> Button
-            # 最好使用 XPath 定位直接子元素
-
-            # 修正逻辑：尝试定位第 site_index 个含有“保存当前页”等按钮的容器
-            # 因为直接靠索引取 span 可能会取到按钮内部的 span
-
-            # 我们先尝试找到当前可见的那个 span
-            visible_span = None
-            # 获取所有直接子 Span (假设结构是 div > span)
-            # 如果不行，我们用 '保存当前页' 这个特征按钮来反向定位当前站点的容器
 
             save_current_btn_xpath = ".//span[contains(text(), '保存当前页')]/ancestor::span[1]"
             # 找到所有这样的容器
