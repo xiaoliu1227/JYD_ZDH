@@ -1,5 +1,6 @@
 import time
 import re
+import traceback
 from PyQt5.QtCore import QThread, pyqtSignal, QMutex, QWaitCondition
 from selenium import webdriver
 from selenium.webdriver.edge.service import Service
@@ -8,12 +9,25 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
-from selenium.common.exceptions import (ElementNotInteractableException,
-                                        ElementClickInterceptedException,
-                                        StaleElementReferenceException,
-                                        WebDriverException,
-                                        NoSuchElementException,
-                                        TimeoutException)
+from selenium.common.exceptions import (
+    StaleElementReferenceException,
+    WebDriverException,
+    NoSuchElementException,
+    TimeoutException,
+    ElementClickInterceptedException
+)
+
+# ==========================================
+# 1. 硬编码页面构造
+# ==========================================
+
+ROOT_XPATH = "//body/textarea/following-sibling::div[1]"
+PREFIX_XPATH = "./div[2]/div/div/div[2]/div"
+
+SHOP_INPUT_XPATH = f"{PREFIX_XPATH}/div[1]/div[1]/form/div[1]/div/div/div[1]/div/input"
+SHOP_LIST_XPATH = f"{PREFIX_XPATH}/div[1]/div[1]/form/div[1]/div/div/div[2]/ul[2]"
+SITE_CONTAINER_XPATH = f"{PREFIX_XPATH}/div[1]/div[2]/div[1]"
+BUTTON_BAR_XPATH = f"{PREFIX_XPATH}/div[3]/div[2]"
 
 
 class LocatorParser:
@@ -21,18 +35,20 @@ class LocatorParser:
     def parse(locator_str: str) -> tuple:
         locator_str = locator_str.strip()
         if not locator_str: return None, None
-        # 智能判断
-        if locator_str.startswith('//') or locator_str.startswith('.') or locator_str.startswith('#'):
-            return (By.XPATH, locator_str) if locator_str.startswith('//') or locator_str.startswith('.//') else (
-                By.CSS_SELECTOR, locator_str)
-        # 属性
+
+        if locator_str.startswith('//') or locator_str.startswith('(') or locator_str.startswith('.//'):
+            return (By.XPATH, locator_str)
+        if locator_str.startswith('#') or locator_str.startswith('.'):
+            return (By.CSS_SELECTOR, locator_str)
         attr_match = re.match(r'^([\w-]+)=\"(.*?)\"$', locator_str) or re.match(r"^([\w-]+)='(.*?)'$", locator_str)
-        if attr_match: return (By.CSS_SELECTOR, f"[{attr_match.group(1)}='{attr_match.group(2)}']")
-        # 文本
-        if re.match(r"^<\w+>.*$", locator_str) or locator_str.startswith("<span"):
-            if locator_str.startswith("<span>"): return (By.XPATH,
-                                                         f"//span[contains(text(), '{locator_str.replace('<span>', '').strip()}')]")
-        return (By.XPATH, f"//*[contains(text(), '{locator_str}')]")
+        if attr_match:
+            return (By.CSS_SELECTOR, f"[{attr_match.group(1)}='{attr_match.group(2)}']")
+
+        if locator_str.startswith("<span>"):
+            text = locator_str.replace("<span>", "").strip()
+            return (By.XPATH, f".//span[contains(text(), '{text}')]")
+
+        return (By.XPATH, f".//*[contains(text(), '{locator_str}')]")
 
 
 class ListingWorker(QThread):
@@ -50,62 +66,21 @@ class ListingWorker(QThread):
         self.driver = None
         self.shop_name = config_data.get('ACCOUNT_NAME', '')
         self.text_source = config_data.get('TEXT_SOURCE', '网页AI生成')
-
-        self.mutex = QMutex()
-        self.cond = QWaitCondition()
         self.is_paused = False
 
-    def stop(self):
-        self.is_running = False
-        self.resume_work()
-
-    def resume_work(self, new_config_data=None):
-        self.mutex.lock()
-        if new_config_data:
-            self.config_data = new_config_data
-            self.log_signal.emit("🔄 配置已更新，继续运行...", "green")
-        self.is_paused = False
-        self.cond.wakeAll()
-        self.mutex.unlock()
-
-    def run(self):
-        try:
-            self.log_signal.emit("正在启动浏览器...", "black")
-            self.driver = self._init_driver()
-            wait = WebDriverWait(self.driver, 20)
-
-            # 1. 登录
-            self._execute_login(self.driver, wait)
-            if not self.is_running: return
-
-            # 2. 导航
-            self._execute_navigation(self.driver, wait)
-            if not self.is_running: return
-
-            # 3. 循环处理
-            self._execute_listing_loop(self.driver, wait)
-
-            self.finished_signal.emit()
-
-        except Exception as e:
-            import traceback
-            err_msg = str(e)
-            if "disconnected" in err_msg or "no such window" in err_msg:
-                self.log_signal.emit("⚠️ 浏览器已断开，任务停止。", "red")
-            else:
-                self.log_signal.emit(f"❌ 运行错误: {err_msg}", "red")
-                self.error_signal.emit(err_msg)
-        finally:
-            pass
+    # ==========================================
+    # 基础工具方法
+    # ==========================================
 
     def _init_driver(self):
         options = EdgeOptions()
         if self.is_headless:
-            options.add_argument("--headless");
+            options.add_argument("--headless")
             options.add_argument("--disable-gpu")
-            options.add_argument("--window-size=1920,1080")
         else:
             options.add_argument("--start-maximized")
+        options.add_argument("--ignore-certificate-errors")
+        options.add_argument("--log-level=3")
         return webdriver.Edge(options=options)
 
     def _parse_config(self):
@@ -117,372 +92,565 @@ class ListingWorker(QThread):
                                               'index': int(ele.get('index', 1))}
         return parsed
 
-    def _find(self, driver, wait, name, root_element=None):
+    def _find(self, driver, wait, name, root_element=None, timeout=10):
         while self.is_running:
-            current_config_map = self._parse_config()
-            cfg = current_config_map.get(name)
-
+            cfg = self._parse_config().get(name)
             if not cfg:
-                self._trigger_pause(f"代码错误：配置中找不到元素 '{name}'")
+                self._trigger_pause(f"配置缺失: {name}")
                 continue
-
-            locator, index, position = cfg['locator'], cfg['index'], cfg['position']
-            context = root_element if root_element else driver
-
             try:
-                if index > 1:
-                    def find_all(d):
-                        eles = context.find_elements(*locator)
-                        return eles if len(eles) >= index else False
+                locator = cfg['locator']
+                ctx = root_element if root_element else driver
 
-                    found = WebDriverWait(driver, 5).until(find_all)
-                    base = found[index - 1]
+                if root_element:
+                    el = ctx.find_element(*locator)
                 else:
-                    if root_element:
-                        # 在元素下查找，手动轮询
-                        base = None
-                        for _ in range(10):  # 5秒
-                            try:
-                                els = context.find_elements(*locator)
-                                if els:
-                                    base = els[0]
-                                    break
-                            except:
-                                pass
-                            time.sleep(0.5)
-                        if not base: raise NoSuchElementException(f"Relative lookup failed: {locator}")
-                    else:
-                        base = WebDriverWait(driver, 5).until(EC.presence_of_element_located(locator))
+                    el = WebDriverWait(driver, timeout).until(EC.presence_of_element_located(locator))
 
-                if position == "父元素":
-                    base = base.find_element(By.XPATH, "./..")
-                elif position == "子元素":
-                    base = base.find_element(By.XPATH, "./*[1]")
-                elif position == "上一个":
-                    base = base.find_element(By.XPATH, "preceding-sibling::*[1]")
-                elif position == "下一个":
-                    base = base.find_element(By.XPATH, "following-sibling::*[1]")
-
-                try:
-                    driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'center'});", base)
-                except:
-                    pass
-                return base
-
+                self._highlight(driver, el, "red")
+                self.log_signal.emit(f"✅ 找到: {name}", "black")
+                return el
             except Exception as e:
-                self.log_signal.emit(f"⚠️ 抓取失败[{name}]: {str(e).splitlines()[0]}", "red")
-                self._trigger_pause(f"抓取失败: {name}")
+                self._trigger_pause(f"未找到: {name}\n{str(e)}")
 
-    def _trigger_pause(self, reason):
-        self.is_paused = True
-        self.pause_required_signal.emit(reason)
-        self.log_signal.emit(f"⏸️ 程序已暂停 ({reason})", "red")
-        self.mutex.lock()
-        if self.is_paused:
-            self.cond.wait(self.mutex)
-        self.mutex.unlock()
+    def _highlight(self, driver, element, color="red"):
+        try:
+            driver.execute_script(f"arguments[0].style.border='3px solid {color}'", element)
+        except:
+            pass
 
-    def _safe_click(self, driver, element, name="元素"):
+    def _safe_click(self, driver, element, name):
         try:
             element.click()
-        except Exception as e:
-            self.log_signal.emit(f"点击 {name} 受阻，尝试强制点击...", "blue")
+        except:
             driver.execute_script("arguments[0].click();", element)
 
     def _safe_input(self, driver, element, text):
         try:
             element.clear()
         except:
-            driver.execute_script("arguments[0].value = '';", element)
-        try:
-            element.send_keys(text)
-        except:
-            time.sleep(1); element.send_keys(text)
+            pass
+        element.send_keys(text)
 
-    def _wait_loading(self, driver, wait, timeout=10):
+    def _wait_loading_mask(self, driver, timeout=10):
         try:
-            masks = driver.find_elements(By.CSS_SELECTOR, ".el-loading-mask")
-            for m in masks:
-                if m.is_displayed():
-                    WebDriverWait(driver, timeout).until(
-                        EC.invisibility_of_element_located((By.CSS_SELECTOR, ".el-loading-mask")))
-                    break
+            WebDriverWait(driver, timeout).until(
+                EC.invisibility_of_element_located((By.CSS_SELECTOR, ".el-loading-mask")))
         except:
             pass
 
-    def _get_active_container(self, driver):
-        self.log_signal.emit("🔍 正在定位【页面结构基座】...", "black")
-        wrapper = self._find(driver, None, '结构_内容包装器')
-        active_site = self._find(driver, None, '结构_激活站点容器', root_element=wrapper)
-        self.log_signal.emit("✅ 成功锁定当前站点操作区域。", "green")
-        return active_site
+    def _trigger_pause(self, reason):
+        self.is_paused = True
+        self.pause_required_signal.emit(reason)
+        while self.is_paused and self.is_running:
+            time.sleep(1)
 
-    def _get_active_ai_popup(self, driver):
-        self.log_signal.emit("寻找激活的 AI 弹窗...", "black")
-        # 使用 parse 解析配置中的 locator
-        raw_locator = self._parse_config()['结构_AI弹窗列表']['locator']
-        candidates = driver.find_elements(*raw_locator)
+    def resume_work(self, new_config_data=None):
+        if new_config_data:
+            self.config_data = new_config_data
+            self.log_signal.emit("🔄 配置已更新，继续运行...", "green")
+        self.is_paused = False
 
-        for div in candidates:
+    def stop(self):
+        self.is_running = False
+        self.is_paused = False
+        self.shutdown_driver()
+
+    def shutdown_driver(self):
+        if self.driver:
             try:
-                if div.find_element(By.CSS_SELECTOR, ".ivu-modal").is_displayed():
-                    return div
+                self.driver.quit()
             except:
-                continue
-        self.log_signal.emit("⚠️ 未找到可见 AI 弹窗。", "red")
-        return None
+                pass
+            self.driver = None
 
-    def _wait_for_site_status(self, driver, timeout=60):
-        self.log_signal.emit("开始监控站点加载状态...", "black")
-        end_time = time.time() + timeout
-        last_log_time = 0
+    # ==========================================
+    # 核心校验工具
+    # ==========================================
+
+    def _validate_unique_visible(self, driver, xpath, name, root_element=None):
+        context = root_element if root_element else driver
+        try:
+            candidates = context.find_elements(By.XPATH, xpath)
+        except Exception as e:
+            self.log_signal.emit(f"❌ [{name}] XPath 语法错误: {e}", "red")
+            return None
+
+        visible_elements = [e for e in candidates if e.is_displayed()]
+        count = len(visible_elements)
+
+        if count == 0:
+            self.log_signal.emit(f"⚠️ [{name}] 元素不可见", "red")
+            return None
+        elif count > 1:
+            self.log_signal.emit(f"❌ [{name}] 发现 {count} 个可见元素，不唯一", "red")
+            for e in visible_elements: self._highlight(driver, e, "purple")
+            return None
+        else:
+            target = visible_elements[0]
+            self._highlight(driver, target, "red")
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});", target)
+            return target
+
+    def _force_close_any_popup(self, driver):
+        try:
+            popups = driver.find_elements(By.XPATH, "//body/div[@top='5vh']")
+            visible_popups = [p for p in popups if p.is_displayed()]
+            for pop in visible_popups:
+                try:
+                    cancel_btn = pop.find_element(By.XPATH, ".//button//span[contains(text(), '取消')]")
+                    driver.execute_script("arguments[0].click();", cancel_btn)
+                    time.sleep(0.5)
+                except:
+                    pass
+        except:
+            pass
 
         try:
-            container = self._find(driver, None, '编辑_站点容器')
-        except:
-            return False
-
-        while time.time() < end_time:
-            try:
-                if driver.find_elements(By.CSS_SELECTOR, ".el-loading-mask"):
-                    masks = [m for m in driver.find_elements(By.CSS_SELECTOR, ".el-loading-mask") if m.is_displayed()]
-                    if masks: time.sleep(0.5); continue
-
-                try:
-                    items = container.find_elements(By.CSS_SELECTOR, "span.item")
-                except StaleElementReferenceException:
-                    container = self._find(driver, None, '编辑_站点容器');
-                    continue
-
-                if not items:
-                    if time.time() - last_log_time >= 5:
-                        self.log_signal.emit("⏳ 容器内暂无按钮...", "blue")
-                        last_log_time = time.time()
-                    time.sleep(0.5);
-                    continue
-
-                all_ready = True
-                status_logs = []
-                for item in items:
+            xpath = "//div[contains(@class, 'ivu-modal-wrap') and not(contains(@style, 'display: none'))]"
+            modals = driver.find_elements(By.XPATH, xpath)
+            for modal in modals:
+                txt = modal.get_attribute("textContent")
+                if "侵权" in txt or "敏感" in txt or "提示" in txt:
                     try:
-                        name = item.find_element(By.CSS_SELECTOR, "button > span > span:nth-child(1)").get_attribute(
-                            "textContent").strip()
-                        status = item.find_element(By.CSS_SELECTOR, "button > span > span:nth-child(2)").get_attribute(
-                            "textContent").strip()
-                        mark = "★" if "iskeep" in item.get_attribute("class") else ""
-                        status_logs.append(f"{mark}{name}{status}")
-                        if "[" not in status or "]" not in status: all_ready = False; continue
-                        content = status.split('[')[1].split(']')[0].strip()
-                        if content == "": continue
-                        if bool(re.search(r'[\u4e00-\u9fa5]', content)): continue
-                        all_ready = False
+                        cancel_btn = modal.find_element(By.XPATH, ".//button//span[contains(text(), '取消')]")
+                        driver.execute_script("arguments[0].click();", cancel_btn)
+                        time.sleep(0.5)
                     except:
-                        all_ready = False; break
+                        pass
+        except:
+            pass
 
-                if time.time() - last_log_time >= 5:
-                    self.log_signal.emit(f"⏳ 监控: {' | '.join(status_logs)}", "blue")
-                    last_log_time = time.time()
+    # ==========================================
+    # 业务流程逻辑
+    # ==========================================
 
-                if all_ready and len(items) > 0:
-                    self.log_signal.emit(f"✅ 站点加载完毕!", "green")
-                    return True
-            except:
-                time.sleep(0.5); continue
-            time.sleep(0.5)
-        self.log_signal.emit("⚠️ 等待超时。", "red");
-        return False
+    def run(self):
+        try:
+            self.log_signal.emit("🚀 正在启动 Edge 浏览器...", "blue")
+            self.driver = self._init_driver()
+            wait = WebDriverWait(self.driver, 20)
 
-    # --- 流程 ---
+            self._execute_login(self.driver, wait)
+            if not self.is_running: return
+
+            self._execute_navigation(self.driver, wait)
+            if not self.is_running: return
+
+            self._execute_listing_loop(self.driver, wait)
+
+            self.log_signal.emit("✅ 全量结构校验任务结束。", "green")
+            self.finished_signal.emit()
+
+        except Exception as e:
+            import traceback
+            print(traceback.format_exc())
+            err_msg = str(e)
+            if "disconnected" in err_msg or "no such window" in err_msg:
+                self.log_signal.emit("⚠️ 浏览器已关闭，任务停止。", "red")
+            else:
+                self.log_signal.emit(f"❌ 严重错误: {err_msg}", "red")
+                self.error_signal.emit(err_msg)
+        finally:
+            pass
+
     def _execute_login(self, driver, wait):
-        self.log_signal.emit("开始登录...", "blue")
+        self.log_signal.emit("--- 开始登录流程 ---", "blue")
         driver.get(self.config_data.get('LOGIN_URL', ''))
+
         self._find(driver, wait, '账号输入框').send_keys(self.config_data.get('USERNAME', ''))
         self._find(driver, wait, '密码输入框').send_keys(self.config_data.get('PASSWORD', ''))
-        self._find(driver, wait, '登录按钮').click()
-        self._wait_loading(driver, wait)
-        self._find(driver, wait, '组织选择弹窗')
-        self._find(driver, wait, '组织输入框').send_keys(self.config_data.get('ORG_CODE', '156'))
-        time.sleep(1)
+
+        btn = self._find(driver, wait, '登录按钮')
+        self._safe_click(driver, btn, "登录")
+
         try:
-            self._find(driver, wait, '组织列表项').click()
+            self._wait_loading_mask(driver, 3)
+            self._find(driver, wait, '组织选择弹窗', timeout=5)
+            self._find(driver, wait, '组织输入框').send_keys(self.config_data.get('ORG_CODE', '156'))
+            time.sleep(0.5)
+            self._safe_click(driver, self._find(driver, wait, '组织列表项'), "选组织")
+            self._safe_click(driver, self._find(driver, wait, '确认登录按钮'), "确认登录")
         except:
             pass
-        self._find(driver, wait, '确认登录按钮').click()
         wait.until(EC.url_contains("home_page"))
 
     def _execute_navigation(self, driver, wait):
-        windows_before = driver.window_handles
-        self.log_signal.emit("导航...", "black")
+        self.log_signal.emit("--- 开始导航流程 ---", "blue")
         try:
-            erp = self._find(driver, wait, '导航_ERP菜单')
-            WebDriverWait(driver, 5).until(EC.visibility_of(erp))
+            erp = self._find(driver, wait, '导航_ERP菜单', timeout=5)
             ActionChains(driver).move_to_element(erp).perform()
-            time.sleep(1.5)
         except:
             pass
-        btn = self._find(driver, wait, '导航_刊登管理')
-        self._safe_click(driver, btn, "菜单")
-        wait.until(EC.new_window_is_opened(windows_before))
-        driver.switch_to.window([w for w in driver.window_handles if w not in windows_before][0])
+        handles = driver.window_handles
+        self._safe_click(driver, self._find(driver, wait, '导航_刊登管理'), "刊登管理")
+        WebDriverWait(driver, 10).until(EC.new_window_is_opened(handles))
+        driver.switch_to.window([w for w in driver.window_handles if w not in handles][0])
 
     def _execute_listing_loop(self, driver, wait):
+        self.log_signal.emit("--- 进入业务页面 ---", "blue")
         try:
-            menu = self._find(driver, wait, '菜单_刊登管理')
-            WebDriverWait(driver, 5).until(EC.visibility_of(menu))
+            menu = self._find(driver, wait, '菜单_刊登管理', timeout=5)
             ActionChains(driver).move_to_element(menu).perform()
-            time.sleep(1)
         except:
             pass
+        self._safe_click(driver, self._find(driver, wait, '菜单_产品列表'), "产品列表")
+        self._wait_loading_mask(driver)
 
-        prod_btn = self._find(driver, wait, '菜单_产品列表')
-        self._safe_click(driver, prod_btn, "产品列表")
-        self._wait_loading(driver, wait)
+        if not self.sku_list:
+            self.log_signal.emit("SKU 列表为空", "red");
+            return
 
-        if not self.sku_list: return
         sku = self.sku_list[0]
-        self.log_signal.emit(f"--- 处理 SKU: {sku} ---", "blue")
+        self.log_signal.emit(f"🔍 处理 SKU: {sku}", "blue")
 
-        self._wait_loading(driver, wait, timeout=5)
-
-        inp = self._find(driver, wait, '搜索_SKU输入框')
-        self._safe_input(driver, inp, sku)
-        search_btn = self._find(driver, wait, '搜索_查询按钮')
-        self._safe_click(driver, search_btn, "查询")
-        self._wait_loading(driver, wait, timeout=15)
-        time.sleep(1)
-
-        list_btn = self._find(driver, wait, '列表_刊登按钮')
-        self._safe_click(driver, list_btn, "刊登")
-
-        # 循环点击下一步
-        self.log_signal.emit("点击下一步...", "blue")
-        time.sleep(2)
-        success = False
-        next_btn_cfg = self._parse_config().get('弹窗_下一步按钮')
-        for i in range(15):
-            try:
-                if not next_btn_cfg: break
-                btn = WebDriverWait(driver, 2).until(EC.presence_of_element_located(next_btn_cfg['locator']))
-                if btn.is_displayed() and btn.is_enabled():
-                    btn.click()
-                    self.log_signal.emit(f"点击 {i + 1}...", "black")
-                    time.sleep(2)
-                else:
-                    success = True; break
-            except:
-                success = True; break
-
-        if not success: self.log_signal.emit("⚠️ 强制进入编辑页...", "red")
-
-        self.log_signal.emit("等待编辑页...", "blue")
-        self._wait_loading(driver, wait)
-        time.sleep(2)
-
-        if not self.shop_name: return
-        self.log_signal.emit(f"选择店铺: {self.shop_name}", "black")
-
-        shop_input = self._find(driver, wait, '编辑_店铺输入框')
-        self._safe_click(driver, shop_input, "店铺输入框")
-        time.sleep(0.5)
-        self._safe_input(driver, shop_input, self.shop_name)
-        time.sleep(1.5)
-
-        try:
-            list_container = self._find(driver, wait, '编辑_店铺列表容器')
-            target_xpath = f".//li[contains(., '{self.shop_name}')]"
-            target_option = list_container.find_element(By.XPATH, target_xpath)
-            self._safe_click(driver, target_option, f"店铺-{self.shop_name}")
-            self.log_signal.emit(f"✅ 已选中店铺", "green")
-
-            # 1. 等待站点
-            self._wait_for_site_status(driver)
-
-            # 2. 获取容器
-            active_container = self._get_active_container(driver)
-
-            # 3. 填单
-            self._fill_module_config(driver, wait, active_container)
-            self._fill_module_info(driver, wait, active_container)
-            self._fill_module_text(driver, wait, active_container)
-            self._handle_submission(driver, wait)
-
-        except Exception as ex:
-            self.log_signal.emit(f"⚠️ 流程异常: {str(ex)}", "red")
-
-        self.log_signal.emit("🛑 流程结束。", "green")
-
-    # --- 模块逻辑 ---
-    def _fill_module_config(self, driver, wait, container):
-        self.log_signal.emit("--> 模块 E: 刊登配置", "blue")
-        try:
-            self._get_active_container(driver)  # 仅测试
-        except:
-            pass
-
-    def _fill_module_info(self, driver, wait, container):
-        self.log_signal.emit("--> 模块 F: 产品信息", "blue")
-
-    def _fill_module_text(self, driver, wait, container):
-        self.log_signal.emit(f"--> 模块 G: 产品文案", "blue")
-        if "网页" not in self.text_source: return
-
-        try:
-            # 1. 打开 AI
-            self.log_signal.emit("打开 AI 弹窗...", "black")
-            ai_btn = self._find(driver, wait, '文案_打开AI按钮', root_element=container)
-            self._safe_click(driver, ai_btn, "AI按钮")
-
+        # 搜索
+        search_success = False
+        for retry in range(3):
+            self.log_signal.emit(f"⏳ 准备搜索 (Wait 3s)...", "black")
+            time.sleep(3)
+            inp = self._find(driver, wait, '搜索_SKU输入框')
+            inp.clear();
+            self._safe_input(driver, inp, sku)
+            self._safe_click(driver, self._find(driver, wait, '搜索_查询按钮'), "查询")
+            self._wait_loading_mask(driver)
             time.sleep(2)
-            # 2. 定位 AI 弹窗容器
-            ai_popup = self._get_active_ai_popup(driver)
-            if not ai_popup: raise Exception("AI 弹窗定位失败")
 
-            # 3. 生成
-            gen_btn = self._find(driver, wait, 'AI_生成按钮', root_element=ai_popup)
-            self._safe_click(driver, gen_btn, "生成")
+            list_btn_cfg = self._parse_config().get('列表_刊登按钮')
+            if not list_btn_cfg:
+                self.log_signal.emit("❌ 配置缺失: 列表_刊登按钮", "red");
+                return
 
-            self.log_signal.emit("AI 生成中...", "blue")
-            title_box = self._find(driver, wait, 'AI_标题输出框', root_element=ai_popup)
+            all_btns = driver.find_elements(*list_btn_cfg['locator'])
+            visible_btns = [b for b in all_btns if b.is_displayed()]
 
-            start = time.time();
-            generated = False
-            while time.time() - start < 120:
-                val = title_box.get_attribute("value")
-                if val and len(val) > 30:
-                    generated = True;
-                    self.log_signal.emit(f"✅ 生成完毕", "green");
-                    break
-                time.sleep(2)
-            if not generated: self.log_signal.emit("⚠️ 生成超时", "red")
+            if len(visible_btns) == 1:
+                self.log_signal.emit("✅ 搜索结果唯一，准备刊登", "green")
+                self._safe_click(driver, visible_btns[0], "刊登")
+                search_success = True;
+                break
+            elif len(visible_btns) == 0:
+                self.log_signal.emit(f"⚠️ 未找到结果，重试...", "red")
+            else:
+                self.log_signal.emit(f"⚠️ 结果不唯一，重试...", "red")
 
-            apply_btn = self._find(driver, wait, 'AI_应用所有按钮', root_element=ai_popup)
-            self._safe_click(driver, apply_btn, "应用按钮")
-            time.sleep(1)
+        if not search_success: return
 
-            # 4. 侵权检测
-            self.log_signal.emit("侵权检测...", "black")
-            check_btn = self._find(driver, wait, '文案_检测侵权按钮', root_element=container)
-            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", check_btn)
-            self._safe_click(driver, check_btn, "侵权检测")
-
-            time.sleep(1.5)
+        # 弹窗
+        for i in range(5):
             try:
-                # 弹窗确认是全局的
-                confirm_cfg = self._parse_config()['侵权_弹窗确认按钮']
-                confirm_btn = WebDriverWait(driver, 3).until(EC.visibility_of_element_located(confirm_cfg['locator']))
-                self._safe_click(driver, confirm_btn, "侵权确认")
-                self.log_signal.emit("已确认侵权", "blue")
+                btn_cfg = self._parse_config().get('弹窗_下一步按钮')
+                if not btn_cfg: break
+                nxt = WebDriverWait(driver, 2).until(EC.visibility_of_element_located(btn_cfg['locator']))
+                self.log_signal.emit(f"检测到弹窗，强制等待 3s...", "black")
+                time.sleep(3);
+                nxt.click();
+                time.sleep(1)
             except:
-                self.log_signal.emit("无侵权阻断", "green")
+                break
+
+        self._wait_loading_mask(driver)
+        self.log_signal.emit("进入编辑页面...", "blue")
+        time.sleep(3)
+
+        # Root & Shop
+        self.log_signal.emit(f"1️⃣ 定位 Root...", "black")
+        root_element = self._validate_unique_visible(driver, ROOT_XPATH, "Root节点")
+        if not root_element: return
+
+        if not self.shop_name:
+            self.log_signal.emit("❌ 未配置店铺名称！", "red");
+            return
+
+        self.log_signal.emit(f"2️⃣ 选择店铺: {self.shop_name} ...", "blue")
+        if not self._handle_shop_selection(driver, root_element): return
+
+        if not self._wait_for_site_status_stable(driver, root_element): return
+
+        try:
+            container = root_element.find_element(By.XPATH, SITE_CONTAINER_XPATH)
+            site_items = container.find_elements(By.CSS_SELECTOR, "span.item")
+            site_count = len(site_items)
+            self.log_signal.emit(f"📊 准备遍历 {site_count} 个站点...", "blue")
+        except Exception as e:
+            self.log_signal.emit(f"❌ 获取站点列表失败: {e}", "red");
+            return
+
+        for i in range(site_count):
+            if not self.is_running: break
+            self.log_signal.emit("----------------------------------------", "black")
+
+            try:
+                current_root = driver.find_element(By.XPATH, ROOT_XPATH)
+                current_container = current_root.find_element(By.XPATH, SITE_CONTAINER_XPATH)
+                target_item = current_container.find_elements(By.CSS_SELECTOR, "span.item")[i]
+
+                current_site_index = i + 1
+                full_text = target_item.get_attribute("textContent").replace("\n", " ").strip()
+                site_name = full_text.split('[')[0].strip()
+
+                self.log_signal.emit(f"👉 [{current_site_index}/{site_count}] 切换: {site_name}", "blue")
+
+                try:
+                    target_item.click()
+                except ElementClickInterceptedException:
+                    self.log_signal.emit("   ⚠️ 点击被拦截，尝试清理弹窗...", "red")
+                    self._force_close_any_popup(driver)
+                    target_item.click()
+
+                time.sleep(2)
+
+                active_root = self._validate_unique_visible(driver, ROOT_XPATH, "Root节点")
+                if not active_root: continue
+
+                # 模块校验
+                path = f"{PREFIX_XPATH}/div[3]/div[1]/div[{current_site_index}]/div/div[1]"
+                if self._validate_unique_visible(driver, path, "刊登配置", active_root): pass
+
+                path = f"{PREFIX_XPATH}/div[3]/div[1]/div[{current_site_index}]/div/div[2]"
+                info_mod = self._validate_unique_visible(driver, path, "产品信息", active_root)
+                if info_mod: self._check_image_button(driver, info_mod)
+
+                path = f"{PREFIX_XPATH}/div[3]/div[1]/div[{current_site_index}]/div/div[4]/div[1]"
+                text_mod = self._validate_unique_visible(driver, path, "产品文案", active_root)
+                if text_mod:
+                    self._check_text_buttons(driver, text_mod)
+                    self._execute_ai_popup_check(driver, text_mod, current_site_index)
+                    self._execute_infringement_check(driver, text_mod, current_site_index)
+
+                # --- 修复：按钮栏校验 (传入站点索引) ---
+                btn_mod = self._validate_unique_visible(driver, BUTTON_BAR_XPATH, "操作按钮", active_root)
+                if btn_mod:
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});", btn_mod)
+                    time.sleep(0.5)
+                    # 传入 current_site_index
+                    self._check_action_buttons(driver, btn_mod, current_site_index)
+
+                self._force_close_any_popup(driver)
+
+            except Exception as ex:
+                self.log_signal.emit(f"❌ 遍历异常: {ex}", "red")
+
+        self.log_signal.emit("========================================", "blue")
+        self.log_signal.emit("🛑 校验结束。", "green")
+        return
+
+    # ==========================================
+    # 核心修复：按钮栏定位
+    # ==========================================
+
+    def _check_action_buttons(self, driver, module_element, site_index):
+        """
+        根据站点索引，精准定位对应的 Span。
+        逻辑：Container -> (Ignore) -> Span(X) -> ...
+        """
+
+        # 1. 公用按钮 (始终存在且可见)
+        try:
+            # 假设它在容器最后，或者用文本匹配
+            submit_all = module_element.find_element(By.XPATH, ".//span[contains(text(), '保存并提交所有站点')]")
+            self._highlight(driver, submit_all, "green")
+            self.log_signal.emit("   ✅ 找到: 按钮_提交所有", "green")
+        except:
+            self.log_signal.emit("   ❌ 按钮_提交所有 缺失", "red")
+
+        # 2. 查找对应站点的 Span (第 site_index 个 span)
+        try:
+            spans = module_element.find_elements(By.TAG_NAME, "span")
+            # 注意：find_elements(By.TAG_NAME, "span") 会抓取所有后代 span，这可能有问题。
+            # 我们应该抓取第一层级的 div 或 span 容器。
+            # 根据描述：Button -> X Spans -> Button
+            # 最好使用 XPath 定位直接子元素
+
+            # 修正逻辑：尝试定位第 site_index 个含有“保存当前页”等按钮的容器
+            # 因为直接靠索引取 span 可能会取到按钮内部的 span
+
+            # 我们先尝试找到当前可见的那个 span
+            visible_span = None
+            # 获取所有直接子 Span (假设结构是 div > span)
+            # 如果不行，我们用 '保存当前页' 这个特征按钮来反向定位当前站点的容器
+
+            save_current_btn_xpath = ".//span[contains(text(), '保存当前页')]/ancestor::span[1]"
+            # 找到所有这样的容器
+            containers = module_element.find_elements(By.XPATH, save_current_btn_xpath)
+
+            # 取第 site_index 个 (如果是按顺序排列的话)
+            # 或者取可见的那个
+            target_container = None
+
+            # 优先尝试取可见的
+            for c in containers:
+                if c.is_displayed():
+                    target_container = c
+                    break
+
+            if target_container:
+                self._highlight(driver, target_container, "blue")  # 蓝色框出当前按钮区
+
+                # 检查内部6个按钮
+                btn_keys = ["按钮_取消", "按钮_同步未推送", "按钮_翻译", "按钮_保存当前",
+                            "按钮_保存所有", "按钮_提交当前"]
+
+                found_count = 0
+                for key in btn_keys:
+                    cfg = self._parse_config().get(key)
+                    try:
+                        btn = target_container.find_element(*cfg['locator'])
+                        self._highlight(driver, btn, "green")
+                        found_count += 1
+                    except:
+                        self.log_signal.emit(f"   ❌ {key} 缺失", "red")
+
+                if found_count == 6:
+                    self.log_signal.emit("   ✅ 私有按钮(6个)全部齐备", "green")
+            else:
+                self.log_signal.emit("   ❌ 未找到当前站点的按钮容器 (可见性检查失败)", "red")
 
         except Exception as e:
-            self.log_signal.emit(f"❌ 文案错误: {e}", "red")
+            self.log_signal.emit(f"   ❌ 按钮栏检查错误: {e}", "red")
 
-    def _handle_submission(self, driver, wait):
-        self.log_signal.emit("--> 模块 H: 功能提交", "blue")
+    # --- 其他内部检查 ---
+    def _check_image_button(self, driver, mod):
+        cfg = self._parse_config().get("信息_选择图片按钮")
+        if not cfg: return
         try:
-            wrapper = self._find(driver, None, '结构_内容包装器')
-            btn_container = wrapper.find_element(By.XPATH, "./div[2]")
-            # save_btn = self._find(driver, wait, '按钮_保存', root_element=btn_container)
+            all_btns = mod.find_elements(*cfg['locator'])
+            visible_btns = [b for b in all_btns if b.is_displayed()]
+            count = len(visible_btns)
+            if count == 1:
+                self.log_signal.emit("   ✅ 图片按钮唯一", "green")
+                self._highlight(driver, visible_btns[0], "green")
+            elif count > 1:
+                self.log_signal.emit("   ⚠️ 多个图片按钮 -> 跳过", "red")
+            else:
+                self.log_signal.emit("   ❌ 无图片按钮", "red")
         except:
             pass
+
+    def _check_text_buttons(self, driver, mod):
+        for k in ["文案_侵权检测按钮", "文案_AI按钮"]:
+            cfg = self._parse_config().get(k)
+            if not cfg: continue
+            try:
+                el = mod.find_element(*cfg['locator'])
+                if el.is_displayed():
+                    self._highlight(driver, el, "green")
+                    self.log_signal.emit(f"   ✅ {k} OK", "green")
+                else:
+                    self.log_signal.emit(f"   ❌ {k} 不可见", "red")
+            except:
+                self.log_signal.emit(f"   ❌ {k} 缺失", "red")
+
+    def _execute_ai_popup_check(self, driver, text_mod, site_index):
+        self.log_signal.emit("   🤖 校验 AI...", "black")
+        try:
+            btn = text_mod.find_element(*self._parse_config().get("文案_AI按钮")['locator'])
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});", btn)
+            driver.execute_script("arguments[0].click();", btn)
+            time.sleep(3)
+        except:
+            return
+
+        pop_xp = f"//body/div[@top='5vh'][{site_index}]"
+        pop = self._validate_unique_visible(driver, pop_xp, "AI弹窗")
+        if not pop: return
+
+        for k in ["AI弹窗_生成按钮", "AI弹窗_应用按钮"]:
+            try:
+                self._highlight(driver, pop.find_element(*self._parse_config().get(k)['locator']), "green")
+            except:
+                self.log_signal.emit(f"   ❌ {k} 缺失", "red")
+
+        try:
+            self._highlight(driver, pop.find_element(*self._parse_config().get("AI弹窗_标题输入框")['locator']),
+                            "green")
+        except:
+            self.log_signal.emit("   ❌ 标题框缺失", "red")
+
+        time.sleep(2)
+        try:
+            c = pop.find_element(*self._parse_config().get("AI弹窗_取消按钮")['locator'])
+            driver.execute_script("arguments[0].click();", c);
+            time.sleep(1.5)
+        except:
+            pass
+
+    def _execute_infringement_check(self, driver, text_mod, site_index):
+        self.log_signal.emit("   🛡️ 侵权检测...", "black")
+        try:
+            btn = text_mod.find_element(*self._parse_config().get("文案_侵权检测按钮")['locator'])
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});", btn)
+            driver.execute_script("arguments[0].click();", btn)
+            time.sleep(5)
+        except:
+            return
+
+        xp = f"//body/div[@top='5vh'][{site_index}]/following-sibling::div[1]"
+        for _ in range(2):
+            try:
+                p = driver.find_element(By.XPATH, xp)
+                if p.is_displayed() and "侵权" in p.get_attribute("textContent"):
+                    self.log_signal.emit("   ⚠️ 发现弹窗", "red")
+                    self._highlight(driver, p, "red")
+                    try:
+                        c = p.find_element(*self._parse_config().get("侵权弹窗_取消按钮")['locator'])
+                        driver.execute_script("arguments[0].click();", c)
+                        self.log_signal.emit("   ✅ 已取消", "green")
+                        time.sleep(2)
+                    except:
+                        pass
+                    break
+                else:
+                    time.sleep(2)
+            except:
+                time.sleep(2)
+
+    def _handle_shop_selection(self, driver, root):
+        ib = self._validate_unique_visible(driver, SHOP_INPUT_XPATH, "输入框", root)
+        if not ib: return False
+        try:
+            ib.click(); ib.clear(); ib.send_keys(self.shop_name); time.sleep(1)
+        except:
+            return False
+
+        lc = self._validate_unique_visible(driver, SHOP_LIST_XPATH, "列表", root)
+        if not lc:
+            try:
+                lc = driver.find_element(By.CSS_SELECTOR, ".ivu-select-dropdown:not([style*='display: none'])")
+                self._highlight(driver, lc, "red")
+            except:
+                return False
+
+        try:
+            li = lc.find_element(By.XPATH, f".//li[contains(text(), '{self.shop_name}')]")
+            self._highlight(driver, li, "red")
+            li.click();
+            self.log_signal.emit(f"✅ 已选: {self.shop_name}", "green");
+            return True
+        except:
+            ib.send_keys(u'\ue007');
+            return True
+
+    def _wait_for_site_status_stable(self, driver, root):
+        self.log_signal.emit("⏳ 等待加载...", "black");
+        time.sleep(10)
+        last = []
+        for _ in range(12):
+            if not self.is_running: return False
+            try:
+                con = root.find_element(By.XPATH, SITE_CONTAINER_XPATH)
+                items = con.find_elements(By.CSS_SELECTOR, "span.item")
+                curr = [i.get_attribute("textContent").strip() for i in items]
+                if not curr: time.sleep(5); continue
+
+                bad = False
+                for t in curr:
+                    if "[" not in t or "]" not in t: bad = True; break
+                if bad: time.sleep(5); continue
+
+                if curr == last: return True
+                last = curr;
+                time.sleep(5)
+            except:
+                time.sleep(5)
+        return False

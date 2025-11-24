@@ -645,11 +645,16 @@ class AutomationToolUI(QMainWindow):
     def handle_batch_ready(self, batch_data, session):
         final_rows = []
 
-        if "模式一" in self.worker.run_mode:
+        # 判断当前模式
+        is_auto_mode = "模式一" in self.worker.run_mode
+
+        if is_auto_mode:
+            # 模式一：自动导出
             for item in batch_data:
                 final_rows.append(self._format_row(item))
             self.log(f"自动保存批次 ({len(final_rows)} 条)...", "green")
         else:
+            # 模式二：人工筛选
             dialog = ImageSelectorDialog(batch_data, 0, session, self)
             result = dialog.exec_()
 
@@ -663,7 +668,10 @@ class AutomationToolUI(QMainWindow):
             else:
                 self.worker.stop()
 
-        self._append_to_excel(self.worker.output_path, final_rows)
+        # 【修改这里】根据模式传入对应的 header_type
+        header_flag = "auto" if is_auto_mode else "manual"
+        self._append_to_excel(self.worker.output_path, final_rows, header_flag)
+
         self.worker.resume()
 
     def _format_row(self, item):
