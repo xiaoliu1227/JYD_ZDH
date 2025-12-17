@@ -1077,30 +1077,51 @@ class SKUResultWidget(QGroupBox):
 
         images = self.sku_data.get('all_images', [])
         if images:
-            area = QWidget();
+            area = QWidget()
             grid = QGridLayout(area)
+
             for i, url in enumerate(images):
                 lbl = ClickableImageLabel(url, self)
                 lbl.setToolTip(url)
                 self.image_label_map[url] = lbl
-                if i < 15:  # 预览限制
-                    try:
-                        r = self.image_session.get(url, timeout=1)
-                        if r.status_code == 200:
-                            p = QPixmap();
-                            p.loadFromData(r.content);
-                            lbl.setPixmap(p)
-                        else:
-                            lbl.setText("X")
-                    except:
-                        lbl.setText("Err")
+
+                if i < 40:  # 预览限制
+                    # 使用改进的加载方法
+                    self.load_image_with_retry(lbl, url)
                 else:
                     lbl.setText(f"Pic {i + 1}")
+
                 grid.addWidget(lbl, i // 8, i % 8)
+
             layout.addWidget(area)
         else:
             layout.addWidget(QLabel("无图片"))
         self.setLayout(layout)
+
+    def load_image_with_retry(self, label, url, max_retries=3):
+        """带重试机制的图片加载"""
+        for attempt in range(max_retries):
+            try:
+                # 增加超时时间到10秒
+                response = self.image_session.get(url, timeout=10)
+                if response.status_code == 200:
+                    pixmap = QPixmap()
+                    if pixmap.loadFromData(response.content) and not pixmap.isNull():
+                        label.setPixmap(pixmap)
+                        return
+                    else:
+                        print(f"图片数据无效: {url}")
+                else:
+                    print(f"HTTP {response.status_code}: {url}")
+            except requests.exceptions.Timeout:
+                print(f"图片加载超时 (尝试 {attempt + 1}/{max_retries}): {url}")
+                continue
+            except Exception as e:
+                print(f"图片加载错误: {e}")
+                break
+
+        # 所有尝试都失败
+        label.setText("加载失败")
 
     def handle_image_click(self, url):
         if url in self.selected_images_list:

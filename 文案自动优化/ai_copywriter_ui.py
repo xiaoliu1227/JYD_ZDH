@@ -133,7 +133,7 @@ class WorkerThread(QThread):
             else:
                 ws = wb.create_sheet(target_sheet_name)
                 # --- 【修改点 2】 表头增加 AI_Title ---
-                headers = ["SKU", "AI_Title", "AI_Keywords", "AI_Bullet1", "AI_Bullet2", "AI_Bullet3", "AI_Bullet4",
+                headers = ["SKU", "AI_标题", "AI_Keywords", "AI_Bullet1", "AI_Bullet2", "AI_Bullet3", "AI_Bullet4",
                            "AI_Bullet5", "AI_Description"]
                 ws.append(headers)
                 try:

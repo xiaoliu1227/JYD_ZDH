@@ -4,9 +4,16 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="c90cc5bf-1bba-4cb4-bae9-716dc1cf4ede" name="更改" comment="V1.0.0 &#10;初始版本 上传 1">
+    <list default="true" id="c90cc5bf-1bba-4cb4-bae9-716dc1cf4ede" name="更改" comment="V1.0.0 &#10;初始版本 上传 1&#10;V2.0.0&#10;代码拆分 优化逻辑">
+      <change afterPath="$PROJECT_DIR$/产品自动刊登/diagnostic_tool.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/产品自动刊登/edge_listing_tool.py" beforeDir="false" afterPath="$PROJECT_DIR$/产品自动刊登/edge_listing_tool.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/产品自动刊登/browser_utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/产品自动刊登/browser_utils.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/产品自动刊登/config_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/产品自动刊登/config_manager.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/产品自动刊登/edge_listing_tool.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/产品自动刊登/editor_actions.py" beforeDir="false" afterPath="$PROJECT_DIR$/产品自动刊登/editor_actions.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/产品自动刊登/main_worker.py" beforeDir="false" afterPath="$PROJECT_DIR$/产品自动刊登/main_worker.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/文案自动优化/ai_copywriter_ui.py" beforeDir="false" afterPath="$PROJECT_DIR$/文案自动优化/ai_copywriter_ui.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/获取产品信息/AutomationToolUI.py" beforeDir="false" afterPath="$PROJECT_DIR$/获取产品信息/AutomationToolUI.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -54,7 +61,12 @@
     "Python.ListingToolUI.executor": "Run",
     "Python.ai_copywriter_ui.executor": "Run",
     "Python.config_manager.executor": "Run",
+    "Python.debug_tool.executor": "Run",
+    "Python.diagnostic_tool.executor": "Run",
+    "Python.edge_listing_tool.executor": "Run",
     "Python.main_app.executor": "Run",
+    "Python.main_worker.executor": "Run",
+    "Python.test_driver.executor": "Run",
     "Python.打包.executor": "Run",
     "Python.测试.executor": "Run",
     "RunOnceActivity.ShowReadmeOnStart": "true",
@@ -177,7 +189,23 @@
       <option name="project" value="LOCAL" />
       <updated>1763974524366</updated>
     </task>
-    <option name="localTasksCounter" value="12" />
+    <task id="LOCAL-00012" summary="V1.0.0 &#10;初始版本 上传 1">
+      <option name="closed" value="true" />
+      <created>1763975841844</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1763975841844</updated>
+    </task>
+    <task id="LOCAL-00013" summary="V1.0.0 &#10;初始版本 上传 1&#10;V2.0.0&#10;代码拆分 优化逻辑">
+      <option name="closed" value="true" />
+      <created>1765869837285</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1765869837285</updated>
+    </task>
+    <option name="localTasksCounter" value="14" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -194,6 +222,7 @@
   <component name="VcsManagerConfiguration">
     <MESSAGE value="V1.0.0 &#10;初始版本 上传" />
     <MESSAGE value="V1.0.0 &#10;初始版本 上传 1" />
-    <option name="LAST_COMMIT_MESSAGE" value="V1.0.0 &#10;初始版本 上传 1" />
+    <MESSAGE value="V1.0.0 &#10;初始版本 上传 1&#10;V2.0.0&#10;代码拆分 优化逻辑" />
+    <option name="LAST_COMMIT_MESSAGE" value="V1.0.0 &#10;初始版本 上传 1&#10;V2.0.0&#10;代码拆分 优化逻辑" />
   </component>
 </project>

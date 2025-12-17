@@ -2,11 +2,10 @@ import traceback
 import sys
 import datetime
 import time
-from PyQt5.QtCore import QThread, pyqtSignal, QObject
+from PyQt5.QtCore import QThread, pyqtSignal
 from selenium import webdriver
 from selenium.webdriver.edge.options import Options as EdgeOptions
 
-# 导入拆分的模块
 try:
     from browser_utils import BrowserBase
     from auth_actions import AuthManager
@@ -79,16 +78,17 @@ class ListingWorker(QThread):
                 # === 单个 SKU 重试循环 (最多2次) ===
                 max_retries = 2
                 retry_count = 0
-                success_flag = False
 
                 while retry_count < max_retries:
                     if not self.is_running: break
                     try:
-                        # [步骤A] 确保在列表页 (如果是非第一次重试，必须先刷新)
+                        # [步骤A] 确保在列表页
+                        # 第一次进来或者退出编辑器后，应该已经在列表页了
+                        # 如果是重试(retry_count > 0)，需要刷新
                         if retry_count > 0:
                             self._log_wrapper("🔄 正在刷新页面清理环境...", "gray")
                             self.driver.refresh()
-                            time.sleep(3)  # 等待刷新白屏结束
+                            time.sleep(3)
 
                         nav_mgr.enter_product_page()
 
@@ -97,27 +97,26 @@ class ListingWorker(QThread):
                             self._update_excel(sku, "搜索失败")
                             break  # 搜都搜不到，就不重试了，直接下一个SKU
 
-                        # [步骤C] 编辑器流程 (这里包含了等待加载、选店铺等)
-                        # 如果这里超时，editor_actions 会抛出异常
+                        # [步骤C] 编辑器环境准备
                         edit_mgr.setup_listing_env(self.config_data.get('ACCOUNT_NAME', ''))
 
                         # [步骤D] 多站点操作
                         edit_mgr.process_all_sites()
 
+                        # [步骤E] 退出编辑器 (新增!)
+                        # 点击取消 -> 确认退出 -> 回到列表页
+                        edit_mgr.exit_editor()
+
                         self._update_excel(sku, "成功")
-                        success_flag = True
                         break  # 成功了，跳出重试循环
 
                     except Exception as e:
                         retry_count += 1
                         self._log_wrapper(f"⚠️ 出错 (第 {retry_count} 次重试): {str(e)}", "orange")
 
-                        # 如果还没达到最大重试次数，不要 break，让 while 继续
                         if retry_count >= max_retries:
                             self._log_wrapper(f"❌ SKU {sku} 最终失败", "red")
                             self._update_excel(sku, f"失败: {str(e)}")
-
-                # 退出内层 while 后，继续外层 for 处理下一个 SKU
 
             self._log_wrapper("🏁 所有任务完成", "green")
             self.finished_signal.emit()
