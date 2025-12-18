@@ -9,7 +9,7 @@ from PyQt5.QtCore import Qt, QSettings
 from PyQt5.QtGui import QIntValidator, QColor, QBrush, QFont
 
 from config_manager import config_manager
-from main_worker import ListingWorker
+from 产品自动刊登.debug_tool import ListingWorker
 
 
 class ListingToolUI(QMainWindow):

@@ -1,134 +1,154 @@
-import traceback
 import sys
-import datetime
+import os
 import time
+import pandas as pd
 from PyQt5.QtCore import QThread, pyqtSignal
 from selenium import webdriver
-from selenium.webdriver.edge.options import Options as EdgeOptions
+from selenium.webdriver.edge.service import Service
+from selenium.webdriver.edge.options import Options
 
-try:
-    from browser_utils import BrowserBase
-    from auth_actions import AuthManager
-    from nav_actions import NavManager
-    from editor_actions import EditorManager
-
-    print("✅ 模块导入成功")
-except ImportError as e:
-    print(f"❌ 模块导入失败: {e}")
+# 引入新架构模块
+from config_manager import config_manager
+from auth_actions import AuthManager
+from nav_actions import NavManager
+from actions.editor_manager import EditorManager
 
 
-class ListingWorker(QThread):
-    log_signal = pyqtSignal(str, str)
+class WorkerThread(QThread):
+    log_signal = pyqtSignal(str, str)  # msg, color
+    progress_signal = pyqtSignal(int)
     finished_signal = pyqtSignal()
-    error_signal = pyqtSignal(str)
 
-    def __init__(self, config_data, is_headless, sku_list, excel_path):
+    def __init__(self, excel_path, account_name, is_headless=False):
         super().__init__()
-        self.config_data = config_data
-        self.is_headless = is_headless
-        self.sku_list = sku_list
         self.excel_path = excel_path
-        self.is_running = True
+        self.account_name = account_name
+        self.is_headless = is_headless
         self.driver = None
+        self.is_running = True
 
-    def _log_wrapper(self, msg, color="black"):
-        try:
-            print(f"[{color}] {msg}")
-            self.log_signal.emit(str(msg), str(color))
-        except:
-            pass
+    def log(self, msg, color="black"):
+        self.log_signal.emit(msg, color)
 
-    def _init_driver(self):
-        options = EdgeOptions()
+    def init_driver(self):
+        self.log("🚀 正在启动浏览器...", "blue")
+        edge_options = Options()
         if self.is_headless:
-            options.add_argument("--headless")
-            options.add_argument("--disable-gpu")
-        else:
-            options.add_argument("--start-maximized")
-        options.add_argument("--ignore-certificate-errors")
-        return webdriver.Edge(options=options)
+            edge_options.add_argument("--headless")
+            edge_options.add_argument("--disable-gpu")
+
+        edge_options.add_argument("--start-maximized")
+        edge_options.add_argument("--ignore-certificate-errors")
+        edge_options.add_argument("--ignore-ssl-errors")
+        # 防止监测
+        edge_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        edge_options.add_experimental_option('useAutomationExtension', False)
+
+        service = Service('msedgedriver.exe')  # 确保驱动在目录下
+        driver = webdriver.Edge(service=service, options=edge_options)
+        driver.implicitly_wait(3)
+        return driver
 
     def run(self):
-        print("▶️ 线程 run() 方法开始执行", flush=True)
         try:
-            self._log_wrapper("🚀 任务启动...", "blue")
-            self.driver = self._init_driver()
+            # 1. 读取 Excel 数据
+            df = pd.read_excel(self.excel_path)
+            # 假设 Excel 有 'SKU' 列，如果没有则取第一列
+            sku_col = 'SKU' if 'SKU' in df.columns else df.columns[0]
+            sku_list = df[sku_col].dropna().astype(str).tolist()
 
-            auth_mgr = AuthManager(self.driver, self.config_data, self._log_wrapper)
-            nav_mgr = NavManager(self.driver, self.config_data, self._log_wrapper)
-            edit_mgr = EditorManager(self.driver, self.config_data, self._log_wrapper)
+            self.log(f"📂 读取到 {len(sku_list)} 个 SKU 待处理", "blue")
 
-            # 1. 登录
-            if not auth_mgr.perform_login(
-                    self.config_data.get('USERNAME', ''),
-                    self.config_data.get('PASSWORD', ''),
-                    self.config_data.get('ORG_CODE', '156')
-            ): raise Exception("登录失败")
+            # 2. 初始化驱动
+            self.driver = self.init_driver()
 
-            # 2. 进入系统
-            if not nav_mgr.nav_to_listing_system():
-                raise Exception("无法进入刊登系统")
+            # 3. 初始化各模块
+            auth = AuthManager(self.driver, self.log_signal)
+            nav = NavManager(self.driver, self.log_signal)
+            editor = EditorManager(self.driver, self.log_signal)
 
-            # 3. SKU 循环
-            for sku in self.sku_list:
+            # 4. 执行登录
+            # 假设 config 中有账户密码配置，这里简化为从 config 读取或由 UI 传递
+            # 这里为了演示，从 config_manager 读取默认账号或写死，实际应从 UI 传入
+            # 暂时使用 config 中的默认值
+            acc_cfg = config_manager.config_data.get("ACCOUNTS", [])
+            # 简单逻辑：如果有账号配置就用第一个，否则需在 UI 完善传参
+            username = acc_cfg[0]['username'] if acc_cfg else "你的账号"
+            password = acc_cfg[0]['password'] if acc_cfg else "你的密码"
+            org_code = config_manager.config_data.get("ORG_CODE", "156")
+
+            if not auth.perform_login(username, password, org_code):
+                self.log("❌ 登录失败，任务终止", "red")
+                return
+
+            # 5. 导航至工作台
+            if not nav.nav_to_listing_system():
+                self.log("❌ 导航失败，任务终止", "red")
+                return
+
+            # 6. 循环处理 SKU
+            total = len(sku_list)
+            for index, sku in enumerate(sku_list):
                 if not self.is_running: break
 
-                self._log_wrapper(f"📦 开始处理 SKU: {sku}", "blue")
+                self.log(f"\n========== 正在处理第 {index + 1}/{total} 个 SKU: {sku} ==========", "purple")
+                self.progress_signal.emit(int((index / total) * 100))
 
-                # === 单个 SKU 重试循环 (最多2次) ===
                 max_retries = 2
-                retry_count = 0
-
-                while retry_count < max_retries:
-                    if not self.is_running: break
+                for retry in range(max_retries):
                     try:
-                        # [步骤A] 确保在列表页
-                        # 第一次进来或者退出编辑器后，应该已经在列表页了
-                        # 如果是重试(retry_count > 0)，需要刷新
-                        if retry_count > 0:
-                            self._log_wrapper("🔄 正在刷新页面清理环境...", "gray")
-                            self.driver.refresh()
-                            time.sleep(3)
+                        # A. 搜索并进入编辑器
+                        # 注意：如果上一个 SKU 失败导致还在编辑器内，需要先检测
+                        if "product_list" not in self.driver.current_url:
+                            self.log("⚠️ 页面位置异常，尝试强制返回列表...", "orange")
+                            nav.enter_product_list_page()
 
-                        nav_mgr.enter_product_page()
+                        found = nav.search_and_edit_sku(sku)
+                        if not found:
+                            self.log(f"⚠️ 无法找到 SKU: {sku}，跳过", "orange")
+                            break  # 跳出重试，处理下一个 SKU
 
-                        # [步骤B] 搜索 SKU
-                        if not nav_mgr.search_and_edit_sku(sku):
-                            self._update_excel(sku, "搜索失败")
-                            break  # 搜都搜不到，就不重试了，直接下一个SKU
+                        # B. 执行全流程
+                        # 获取店铺名，这里假设全用同一个，或者 Excel 里有 'Shop' 列
+                        # shop_name = df.iloc[index]['Shop']
+                        shop_name = "KAPA-US"  # 示例默认值，实际应读取 Excel
 
-                        # [步骤C] 编辑器环境准备
-                        edit_mgr.setup_listing_env(self.config_data.get('ACCOUNT_NAME', ''))
+                        editor.process_full_cycle(shop_name)
 
-                        # [步骤D] 多站点操作
-                        edit_mgr.process_all_sites()
-
-                        # [步骤E] 退出编辑器 (新增!)
-                        # 点击取消 -> 确认退出 -> 回到列表页
-                        edit_mgr.exit_editor()
-
-                        self._update_excel(sku, "成功")
-                        break  # 成功了，跳出重试循环
+                        self.log(f"✅ SKU {sku} 处理完毕", "green")
+                        break  # 成功，退出重试循环
 
                     except Exception as e:
-                        retry_count += 1
-                        self._log_wrapper(f"⚠️ 出错 (第 {retry_count} 次重试): {str(e)}", "orange")
+                        err_msg = str(e)
+                        self.log(f"❌ SKU {sku} 处理异常 (尝试 {retry + 1}): {err_msg}", "red")
 
-                        if retry_count >= max_retries:
-                            self._log_wrapper(f"❌ SKU {sku} 最终失败", "red")
-                            self._update_excel(sku, f"失败: {str(e)}")
+                        # 特殊处理：如果是加载超时 (Editor_Loading_Timeout)
+                        if "Editor_Loading_Timeout" in err_msg or "element" in err_msg:
+                            self.log("🔄 触发浏览器刷新机制...", "blue")
+                            try:
+                                self.driver.refresh()
+                                time.sleep(5)
+                                nav.enter_product_list_page()  # 刷新后要回到列表
+                            except:
+                                pass
 
-            self._log_wrapper("🏁 所有任务完成", "green")
-            self.finished_signal.emit()
+                        # 如果是最后一次尝试，记录失败
+                        if retry == max_retries - 1:
+                            self.log(f"❌ SKU {sku} 最终失败，跳过", "red")
+
+                # 稍作休息
+                time.sleep(2)
+
+            self.progress_signal.emit(100)
+            self.log("\n🏁 所有任务已完成！", "green")
 
         except Exception as e:
-            traceback.print_exc()
-            self.error_signal.emit(str(e))
+            self.log(f"❌ 线程发生致命错误: {e}", "red")
         finally:
-            if self.driver: self.driver.quit()
-
-    def _update_excel(self, sku, status):
-        print(f"📝 [Excel模拟写入] SKU: {sku} -> 状态: {status}")
+            if self.driver:
+                self.log("👋 关闭浏览器...", "gray")
+                self.driver.quit()
+            self.finished_signal.emit()
 
     def stop(self):
         self.is_running = False
