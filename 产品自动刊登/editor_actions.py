@@ -107,27 +107,27 @@ class EditorManager(BrowserBase):
         解决了 "多Tab页面有多个同名隐藏按钮" 导致的定位失败问题。
         """
         try:
-            # 1. 文本映射表 (防止配置文件没更新)
-            text_map = {
-                "按钮_保存当前": "保存当前页",
-                "按钮_同步": "同步至未推送站点",
-                "按钮_翻译": "翻译",
-                "按钮_提交当前": "保存并提交当前页",
-                "按钮_提交所有": "保存并提交所有站点",
-                "按钮_取消": "取消"
-            }
-
-            target_text = text_map.get(btn_config_name, "")
-
-            # 2. 优先通过文本全局查找 (最稳健)
-            if target_text:
-                xpath = f"//button[contains(., '{target_text}')]"
-                btns = self.driver.find_elements(By.XPATH, xpath)
-            else:
-                # 降级：使用配置文件的 locator
-                cfg = self._parse_config().get(btn_config_name)
-                if not cfg: return False
-                btns = self.driver.find_elements(*cfg['locator'])
+            # # 1. 文本映射表 (防止配置文件没更新)
+            # text_map = {
+            #     "按钮_保存当前": "保存当前页",
+            #     "按钮_同步": "同步至未推送站点",
+            #     "按钮_翻译": "翻译",
+            #     "按钮_提交当前": "保存并提交当前页",
+            #     "按钮_提交所有": "保存并提交所有站点",
+            #     "按钮_取消": "取消"
+            # }
+            #
+            # target_text = text_map.get(btn_config_name, "")
+            #
+            # # 2. 优先通过文本全局查找 (最稳健)
+            # if target_text:
+            #     xpath = f"//button[contains(., '{target_text}')]"
+            #     btns = self.driver.find_elements(By.XPATH, xpath)
+            # else:
+            # 降级：使用配置文件的 locator
+            cfg = self._parse_config().get(btn_config_name)
+            if not cfg: return False
+            btns = self.driver.find_elements(*cfg['locator'])
 
             # 3. 遍历找到唯一可见的那个并点击
             for btn in btns:
